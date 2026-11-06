@@ -18,22 +18,22 @@ object AutomationManager {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var delayJob: Job? = null
 
-    // User Profile & Theme state (Client-Facing Display)
+    // User Profile & Theme state
     val userProfileName = MutableStateFlow("Vishal Kumar (Active)")
-    val userProfilePhone = MutableStateFlow("Connected via WhatsApp")
-    val isDarkMode = MutableStateFlow(false) // Default Light Mode!
+    val isDarkMode = MutableStateFlow(false) // Default Light
 
-    // Target configuration
-    val targetGroups = MutableStateFlow<List<TargetGroupItem>>(emptyList())
-    val categories = MutableStateFlow(listOf("General", "Marketing", "Clients", "VIP"))
+    // Categories & Recipients
+    val categories = MutableStateFlow(listOf("Business", "Study", "Friends", "Clients"))
     val activeCategoryFilter = MutableStateFlow("All")
+    val targetRecipients = MutableStateFlow<List<TargetRecipient>>(emptyList())
 
-    // Media & Caption Content
+    // Media & File & Caption Content
     val selectedMediaUri = MutableStateFlow<Uri?>(null)
     val mediaMimeType = MutableStateFlow("image/*")
+    val mediaFileName = MutableStateFlow("")
     val captionText = MutableStateFlow("")
 
-    // Anti-ban randomized timing
+    // Anti-ban timing
     val minDelaySeconds = MutableStateFlow(6)
     val maxDelaySeconds = MutableStateFlow(12)
 
@@ -41,11 +41,11 @@ object AutomationManager {
     private val _status = MutableStateFlow(AutomationStatus())
     val status: StateFlow<AutomationStatus> = _status.asStateFlow()
 
-    // Analytics & History
+    // Analytics
     val broadcastHistory = MutableStateFlow<List<BroadcastRecord>>(emptyList())
     val stats = MutableStateFlow(BroadcastStats())
 
-    private var activeQueue: List<TargetGroupItem> = emptyList()
+    private var activeQueue: List<TargetRecipient> = emptyList()
 
     val isRunning: Boolean
         get() = _status.value.step != AutomationStep.IDLE &&
@@ -54,17 +54,22 @@ object AutomationManager {
 
     fun openDirectWhatsAppPicker(context: Context) {
         val uri = selectedMediaUri.value
-        if (uri == null) {
-            Toast.makeText(context, "Please select a photo, video or sticker first!", Toast.LENGTH_SHORT).show()
+        val caption = captionText.value.trim()
+
+        if (uri == null && caption.isEmpty()) {
+            Toast.makeText(context, "Please attach a photo/file or write a message first!", Toast.LENGTH_SHORT).show()
             return
         }
 
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = mediaMimeType.value
-            putExtra(Intent.EXTRA_STREAM, uri)
-
-            val caption = captionText.value.trim()
-            if (caption.isNotEmpty()) {
+            if (uri != null) {
+                type = mediaMimeType.value
+                putExtra(Intent.EXTRA_STREAM, uri)
+                if (caption.isNotEmpty()) {
+                    putExtra(Intent.EXTRA_TEXT, caption)
+                }
+            } else {
+                type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, caption)
             }
 
@@ -76,9 +81,9 @@ object AutomationManager {
         try {
             context.startActivity(shareIntent)
             val record = BroadcastRecord(
-                groupName = "Direct WhatsApp Share",
-                mediaType = mediaMimeType.value,
-                captionPreview = captionText.value.take(40),
+                groupName = "WhatsApp Multi-Select",
+                mediaType = if (uri != null) mediaMimeType.value else "text/plain",
+                captionPreview = caption.take(40),
                 isSuccess = true
             )
             broadcastHistory.value = listOf(record) + broadcastHistory.value.take(29)
@@ -90,24 +95,29 @@ object AutomationManager {
                 shareIntent.setPackage("com.whatsapp.w4b")
                 context.startActivity(shareIntent)
             } catch (ex: Exception) {
-                Toast.makeText(context, "WhatsApp is not installed on this phone.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "WhatsApp is not installed on this device.", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    fun addGroup(name: String, category: String = "General") {
+    fun addRecipient(name: String, category: String = "General", type: RecipientType = RecipientType.GROUP) {
         val trimmed = name.trim()
-        if (trimmed.isNotEmpty() && targetGroups.value.none { it.name.equals(trimmed, ignoreCase = true) }) {
-            targetGroups.value = targetGroups.value + TargetGroupItem(trimmed, category)
+        if (trimmed.isNotEmpty() && targetRecipients.value.none { it.name.equals(trimmed, ignoreCase = true) }) {
+            targetRecipients.value = targetRecipients.value + TargetRecipient(trimmed, category, type)
         }
     }
 
-    fun removeGroup(name: String) {
-        targetGroups.value = targetGroups.value.filter { it.name != name }
+    fun removeRecipient(name: String) {
+        targetRecipients.value = targetRecipients.value.filter { it.name != name }
     }
 
-    fun clearGroups() {
-        targetGroups.value = emptyList()
+    fun clearActiveCategoryRecipients() {
+        val filter = activeCategoryFilter.value
+        if (filter == "All") {
+            targetRecipients.value = emptyList()
+        } else {
+            targetRecipients.value = targetRecipients.value.filter { it.category != filter }
+        }
     }
 
     fun addCategory(categoryName: String) {
@@ -117,38 +127,39 @@ object AutomationManager {
         }
     }
 
-    fun getFilteredGroups(): List<TargetGroupItem> {
+    fun getFilteredRecipients(): List<TargetRecipient> {
         val filter = activeCategoryFilter.value
         return if (filter == "All") {
-            targetGroups.value
+            targetRecipients.value
         } else {
-            targetGroups.value.filter { it.category == filter }
+            targetRecipients.value.filter { it.category == filter }
         }
     }
 
     fun startBroadcast(context: Context) {
-        val queue = getFilteredGroups()
+        val queue = getFilteredRecipients()
         val uri = selectedMediaUri.value
+        val caption = captionText.value.trim()
 
         if (queue.isEmpty()) {
-            Toast.makeText(context, "No groups in queue! Use 'Open WhatsApp & Pick' or add a group below.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "No recipients in this tab! Tap + to add groups or 1-to-1 friends.", Toast.LENGTH_SHORT).show()
             return
         }
 
-        if (uri == null) {
-            Toast.makeText(context, "Please select a photo, video or sticker first!", Toast.LENGTH_SHORT).show()
+        if (uri == null && caption.isEmpty()) {
+            Toast.makeText(context, "Please attach a photo/file or write a message!", Toast.LENGTH_SHORT).show()
             return
         }
 
         activeQueue = queue
-        dispatchToGroup(context, 0)
+        dispatchToRecipient(context, 0)
     }
 
     fun stopBroadcast() {
         delayJob?.cancel()
         _status.value = AutomationStatus(
             step = AutomationStep.IDLE,
-            logMessage = "Broadcast stopped safely."
+            logMessage = "Broadcast halted."
         )
     }
 
@@ -157,17 +168,23 @@ object AutomationManager {
         return if (index in activeQueue.indices) activeQueue[index].name else null
     }
 
+    fun getCurrentRecipientType(): RecipientType {
+        val index = _status.value.currentIndex
+        return if (index in activeQueue.indices) activeQueue[index].type else RecipientType.GROUP
+    }
+
     fun updateStep(step: AutomationStep, message: String) {
         _status.value = _status.value.copy(step = step, logMessage = message)
     }
 
     fun onGroupDispatched(context: Context) {
         val currentIndex = _status.value.currentIndex
-        val targetName = getCurrentTarget() ?: "Group"
+        val targetName = getCurrentTarget() ?: "Chat"
+        val recipientType = getCurrentRecipientType()
 
         val record = BroadcastRecord(
-            groupName = targetName,
-            mediaType = mediaMimeType.value,
+            groupName = (if (recipientType == RecipientType.INDIVIDUAL) "👤 $targetName (Private)" else "👥 $targetName"),
+            mediaType = if (selectedMediaUri.value != null) mediaMimeType.value else "text/plain",
             captionPreview = captionText.value.take(40),
             isSuccess = true
         )
@@ -188,7 +205,7 @@ object AutomationManager {
                 step = AutomationStep.COMPLETED,
                 currentIndex = total,
                 totalCount = total,
-                logMessage = "Success! All $total groups reached."
+                logMessage = "Completed! Reached all $total recipients."
             )
             return
         }
@@ -200,7 +217,7 @@ object AutomationManager {
         _status.value = _status.value.copy(
             step = AutomationStep.COOLDOWN_DELAY,
             delayCountdownSeconds = delaySec,
-            logMessage = "Dispatched to ${currentIndex + 1}/$total. Safe anti-ban cooldown: ${delaySec}s..."
+            logMessage = "Delivered to ${currentIndex + 1}/$total. Anti-ban interval: ${delaySec}s..."
         )
 
         delayJob?.cancel()
@@ -209,28 +226,34 @@ object AutomationManager {
                 _status.value = _status.value.copy(delayCountdownSeconds = remaining)
                 delay(1000)
             }
-            dispatchToGroup(context, nextIndex)
+            dispatchToRecipient(context, nextIndex)
         }
     }
 
-    private fun dispatchToGroup(context: Context, index: Int) {
-        val uri = selectedMediaUri.value ?: return
-        val currentGroup = activeQueue[index].name
+    private fun dispatchToRecipient(context: Context, index: Int) {
+        val uri = selectedMediaUri.value
+        val recipient = activeQueue[index]
+        val isPrivate = recipient.type == RecipientType.INDIVIDUAL
+        val caption = captionText.value.trim()
 
         _status.value = AutomationStatus(
             step = AutomationStep.INITIATED,
-            currentGroupName = currentGroup,
+            currentGroupName = recipient.name,
             currentIndex = index,
             totalCount = activeQueue.size,
-            logMessage = "Dispatching to \"$currentGroup\" (${index + 1}/${activeQueue.size})"
+            logMessage = if (isPrivate) "Sending 1-on-1 private chat to \"${recipient.name}\" (${index + 1}/${activeQueue.size})"
+                         else "Sending to group \"${recipient.name}\" (${index + 1}/${activeQueue.size})"
         )
 
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = mediaMimeType.value
-            putExtra(Intent.EXTRA_STREAM, uri)
-
-            val caption = captionText.value.trim()
-            if (caption.isNotEmpty()) {
+            if (uri != null) {
+                type = mediaMimeType.value
+                putExtra(Intent.EXTRA_STREAM, uri)
+                if (caption.isNotEmpty()) {
+                    putExtra(Intent.EXTRA_TEXT, caption)
+                }
+            } else {
+                type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, caption)
             }
 
@@ -248,7 +271,7 @@ object AutomationManager {
             } catch (ex: Exception) {
                 _status.value = _status.value.copy(
                     step = AutomationStep.ERROR,
-                    logMessage = "WhatsApp application not detected on device."
+                    logMessage = "WhatsApp application not found."
                 )
             }
         }
@@ -259,17 +282,19 @@ object AutomationManager {
             val prefs = context.getSharedPreferences("wa_poster_data", Context.MODE_PRIVATE)
 
             userProfileName.value = prefs.getString("user_profile_name", "Vishal Kumar (Active)") ?: "Vishal Kumar (Active)"
-            isDarkMode.value = prefs.getBoolean("is_dark_mode", false) // Default Light
+            isDarkMode.value = prefs.getBoolean("is_dark_mode", false)
 
-            val groupsJson = prefs.getString("groups_json", null)
-            if (groupsJson != null) {
-                val array = JSONArray(groupsJson)
-                val list = mutableListOf<TargetGroupItem>()
+            val recipientsJson = prefs.getString("recipients_json", null)
+            if (recipientsJson != null) {
+                val array = JSONArray(recipientsJson)
+                val list = mutableListOf<TargetRecipient>()
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
-                    list.add(TargetGroupItem(obj.getString("name"), obj.optString("category", "General")))
+                    val typeStr = obj.optString("type", "GROUP")
+                    val type = if (typeStr == "INDIVIDUAL") RecipientType.INDIVIDUAL else RecipientType.GROUP
+                    list.add(TargetRecipient(obj.getString("name"), obj.optString("category", "General"), type))
                 }
-                targetGroups.value = list
+                targetRecipients.value = list
             }
 
             val dispatched = prefs.getInt("stats_dispatched", 0)
@@ -288,13 +313,14 @@ object AutomationManager {
             editor.putBoolean("is_dark_mode", isDarkMode.value)
 
             val array = JSONArray()
-            targetGroups.value.forEach {
+            targetRecipients.value.forEach {
                 val obj = JSONObject()
                 obj.put("name", it.name)
                 obj.put("category", it.category)
+                obj.put("type", it.type.name)
                 array.put(obj)
             }
-            editor.putString("groups_json", array.toString())
+            editor.putString("recipients_json", array.toString())
             editor.putInt("stats_dispatched", stats.value.totalDispatched)
             editor.putInt("stats_success", stats.value.totalSuccess)
             editor.putFloat("stats_saved_min", stats.value.minutesSaved.toFloat())

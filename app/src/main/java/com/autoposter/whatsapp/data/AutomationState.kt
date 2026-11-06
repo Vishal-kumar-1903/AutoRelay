@@ -12,9 +12,15 @@ enum class AutomationStep {
     ERROR
 }
 
-data class TargetGroupItem(
+enum class RecipientType {
+    GROUP,       // Group Chat
+    INDIVIDUAL   // 1-to-1 Private Friend Chat (Sent separately)
+}
+
+data class TargetRecipient(
     val name: String,
-    val category: String = "General"
+    val category: String = "General",
+    val type: RecipientType = RecipientType.GROUP
 )
 
 data class BroadcastRecord(
@@ -38,5 +44,5 @@ data class AutomationStatus(
     val currentIndex: Int = 0,
     val totalCount: Int = 0,
     val delayCountdownSeconds: Int = 0,
-    val logMessage: String = "System Ready"
+    val logMessage: String = "Ready"
 )

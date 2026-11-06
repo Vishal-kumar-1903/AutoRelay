@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">WA Auto Poster</string>
-    <string name="accessibility_service_description">Automates sharing media to selected WhatsApp groups without manual repetitive tapping. 100% on-device and private.</string>
+    <string name="app_name">AutoRelay</string>
+    <string name="accessibility_service_description">Automates sharing media to selected WhatsApp groups and 1-on-1 private contacts without manual repetitive tapping. 100% on-device and private.</string>
 </resources>

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
@@ -40,7 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.autoposter.whatsapp.data.AutomationStep
+import com.autoposter.whatsapp.data.*
 import com.autoposter.whatsapp.service.AutomationManager
 import com.autoposter.whatsapp.ui.theme.*
 import java.text.SimpleDateFormat
@@ -59,7 +60,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AutoRelayMainDashboard()
+                    AutoRelayCleanWorkspace()
                 }
             }
         }
@@ -73,13 +74,50 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AutoRelayMainDashboard() {
+fun AutoRelayCleanWorkspace() {
     val context = LocalContext.current
-    var selectedTab by remember { mutableIntStateOf(0) }
     var isAccessibilityEnabled by remember { mutableStateOf(checkAccessibilityService(context)) }
     val isDark by AutomationManager.isDarkMode.collectAsState()
 
-    var showEditProfileDialog by remember { mutableStateOf(false) }
+    var showActionSheet by remember { mutableStateOf(false) }
+    var showAddRecipientModal by remember { mutableStateOf(false) }
+    var showAddCategoryModal by remember { mutableStateOf(false) }
+    var showMetricsModal by remember { mutableStateOf(false) }
+    var showRestrictedHelpDialog by remember { mutableStateOf(false) }
+
+    val activeFilter by AutomationManager.activeCategoryFilter.collectAsState()
+    val categories by AutomationManager.categories.collectAsState()
+    val recipients = AutomationManager.getFilteredRecipients()
+    val mediaUri by AutomationManager.selectedMediaUri.collectAsState()
+    val mediaName by AutomationManager.mediaFileName.collectAsState()
+    val caption by AutomationManager.captionText.collectAsState()
+    val status by AutomationManager.status.collectAsState()
+    val minDelay by AutomationManager.minDelaySeconds.collectAsState()
+    val maxDelay by AutomationManager.maxDelaySeconds.collectAsState()
+
+    // Pick Photo/Video
+    val mediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            AutomationManager.selectedMediaUri.value = uri
+            val type = context.contentResolver.getType(uri) ?: "image/*"
+            AutomationManager.mediaMimeType.value = type
+            AutomationManager.mediaFileName.value = getFileName(context, uri) ?: "Attached Media"
+        }
+    }
+
+    // Pick Any Document / File (PDF, docs, apk, zip)
+    val docPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            AutomationManager.selectedMediaUri.value = uri
+            val type = context.contentResolver.getType(uri) ?: "*/*"
+            AutomationManager.mediaMimeType.value = type
+            AutomationManager.mediaFileName.value = getFileName(context, uri) ?: "Document File"
+        }
+    }
 
     LaunchedEffect(Unit) {
         isAccessibilityEnabled = checkAccessibilityService(context)
@@ -89,53 +127,38 @@ fun AutoRelayMainDashboard() {
         topBar = {
             TopAppBar(
                 title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(9.dp))
                                 .background(Brush.linearGradient(listOf(BrandEmerald, BrandTealDark))),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "AutoRelay",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 18.sp,
-                                    color = if (isDark) DarkTextPrimary else LightTextPrimary
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("AutoRelay", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                Spacer(modifier = Modifier.width(5.dp))
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(BrandEmerald.copy(alpha = 0.15f))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
                                 ) {
                                     Text("PRO", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
                                 }
                             }
-                            Text(
-                                text = "WhatsApp Marketing Suite",
-                                fontSize = 11.sp,
-                                color = if (isDark) DarkTextSecondary else LightTextSecondary
-                            )
+                            Text("Active WhatsApp Link • Ready", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
                         }
                     }
                 },
                 actions = {
-                    // Quick Light / Dark Mode Toggle Button
+                    IconButton(onClick = { showMetricsModal = true }) {
+                        Icon(Icons.Outlined.BarChart, contentDescription = "Metrics", tint = if (isDark) DarkTextSecondary else LightTextSecondary)
+                    }
                     IconButton(onClick = { AutomationManager.isDarkMode.value = !isDark }) {
                         Icon(
                             imageVector = if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
@@ -149,643 +172,741 @@ fun AutoRelayMainDashboard() {
                 )
             )
         },
-        bottomBar = {
-            NavigationBar(
-                containerColor = if (isDark) DarkSurface else LightSurface,
-                tonalElevation = 2.dp,
-                modifier = Modifier.border(
-                    width = 0.5.dp,
-                    color = if (isDark) DarkCardBorder else LightCardBorder,
-                    shape = RoundedCornerShape(0.dp)
-                )
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showActionSheet = true },
+                containerColor = BrandEmerald,
+                contentColor = Color.White,
+                shape = CircleShape,
+                modifier = Modifier.size(56.dp)
             ) {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(if (selectedTab == 0) Icons.Default.FlashOn else Icons.Outlined.FlashOn, contentDescription = "Broadcast") },
-                    label = { Text("Broadcast", fontSize = 11.sp, fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = BrandEmerald,
-                        selectedTextColor = BrandEmerald,
-                        unselectedIconColor = if (isDark) DarkTextMuted else LightTextMuted,
-                        unselectedTextColor = if (isDark) DarkTextMuted else LightTextMuted,
-                        indicatorColor = BrandEmerald.copy(alpha = 0.12f)
-                    )
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(if (selectedTab == 1) Icons.Default.Folder else Icons.Outlined.Folder, contentDescription = "Folders") },
-                    label = { Text("Folders", fontSize = 11.sp, fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AccentSky,
-                        selectedTextColor = AccentSky,
-                        unselectedIconColor = if (isDark) DarkTextMuted else LightTextMuted,
-                        unselectedTextColor = if (isDark) DarkTextMuted else LightTextMuted,
-                        indicatorColor = AccentSky.copy(alpha = 0.12f)
-                    )
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(if (selectedTab == 2) Icons.Default.BarChart else Icons.Outlined.BarChart, contentDescription = "Metrics") },
-                    label = { Text("Analytics", fontSize = 11.sp, fontWeight = if (selectedTab == 2) FontWeight.Bold else FontWeight.Normal) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AccentViolet,
-                        selectedTextColor = AccentViolet,
-                        unselectedIconColor = if (isDark) DarkTextMuted else LightTextMuted,
-                        unselectedTextColor = if (isDark) DarkTextMuted else LightTextMuted,
-                        indicatorColor = AccentViolet.copy(alpha = 0.12f)
-                    )
-                )
+                Icon(Icons.Default.Add, contentDescription = "Add Content or Recipients", modifier = Modifier.size(26.dp))
             }
         }
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
                 .background(if (isDark) DarkBg else LightBg)
         ) {
-            when (selectedTab) {
-                0 -> BroadcastMainScreen(
-                    context = context,
-                    isDark = isDark,
-                    isAccessibilityEnabled = isAccessibilityEnabled,
-                    onOpenProfileDialog = { showEditProfileDialog = true },
-                    onRefreshPermission = { isAccessibilityEnabled = checkAccessibilityService(context) }
-                )
-                1 -> FoldersMainScreen(isDark = isDark)
-                2 -> MetricsMainScreen(isDark = isDark)
-            }
-        }
-    }
 
-    if (showEditProfileDialog) {
-        EditProfileModal(
-            isDark = isDark,
-            onDismiss = { showEditProfileDialog = false }
-        )
-    }
-}
-
-@Composable
-fun BroadcastMainScreen(
-    context: Context,
-    isDark: Boolean,
-    isAccessibilityEnabled: Boolean,
-    onOpenProfileDialog: () -> Unit,
-    onRefreshPermission: () -> Unit
-) {
-    val groups = AutomationManager.getFilteredGroups()
-    val mediaUri by AutomationManager.selectedMediaUri.collectAsState()
-    val caption by AutomationManager.captionText.collectAsState()
-    val status by AutomationManager.status.collectAsState()
-    val minDelay by AutomationManager.minDelaySeconds.collectAsState()
-    val maxDelay by AutomationManager.maxDelaySeconds.collectAsState()
-    val categories by AutomationManager.categories.collectAsState()
-    val activeFilter by AutomationManager.activeCategoryFilter.collectAsState()
-    val profileName by AutomationManager.userProfileName.collectAsState()
-
-    var newGroupName by remember { mutableStateOf("") }
-
-    val mediaPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            AutomationManager.selectedMediaUri.value = uri
-            val mimeType = context.contentResolver.getType(uri) ?: "image/*"
-            AutomationManager.mediaMimeType.value = mimeType
-        }
-    }
-
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(vertical = 12.dp)
-    ) {
-
-        // 1. Client-Facing Connected WhatsApp Profile Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = if (isDark) 0.dp else 2.dp, shape = RoundedCornerShape(16.dp))
-                    .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(16.dp))
-                    .clickable { onOpenProfileDialog() }
+            // 1. Clean Category Pills Bar (All, Business, Study, Friends, + Add)
+            Surface(
+                color = if (isDark) DarkSurface else LightSurface,
+                modifier = Modifier.fillMaxWidth().border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(0.dp))
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(CircleShape)
-                            .background(BrandEmerald.copy(alpha = 0.15f))
-                            .border(1.5.dp, BrandEmerald, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = profileName.take(2).uppercase(),
-                            fontWeight = FontWeight.ExtraBold,
-                            color = BrandEmerald,
-                            fontSize = 16.sp
+                    item {
+                        CategoryPill(
+                            label = "All",
+                            count = AutomationManager.targetRecipients.value.size,
+                            isSelected = activeFilter == "All",
+                            isDark = isDark,
+                            onClick = { AutomationManager.activeCategoryFilter.value = "All" }
                         )
                     }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = profileName,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp,
-                                color = if (isDark) DarkTextPrimary else LightTextPrimary
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = "Verified",
-                                tint = BrandEmerald,
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(BrandEmerald)
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = "WhatsApp Active • Ready to Broadcast",
-                                fontSize = 11.sp,
-                                color = if (isDark) DarkTextSecondary else LightTextSecondary
-                            )
-                        }
-                    }
-
-                    IconButton(onClick = onOpenProfileDialog, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            Icons.Outlined.Edit,
-                            contentDescription = "Edit Profile",
-                            tint = if (isDark) DarkTextMuted else LightTextMuted,
-                            modifier = Modifier.size(16.dp)
+                    items(categories) { cat ->
+                        val count = AutomationManager.targetRecipients.value.count { it.category == cat }
+                        CategoryPill(
+                            label = cat,
+                            count = count,
+                            isSelected = activeFilter == cat,
+                            isDark = isDark,
+                            onClick = { AutomationManager.activeCategoryFilter.value = cat }
                         )
                     }
-                }
-            }
-        }
-
-        // 2. Permission Banner (If disabled)
-        if (!isAccessibilityEnabled) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.border(1.dp, AccentAmber.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Security, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Accessibility Permission Needed", fontWeight = FontWeight.Bold, color = AccentAmber, fontSize = 13.sp)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "Enable AutoRelay under Downloaded apps to allow automatic group message sending.",
-                            fontSize = 12.sp,
-                            color = if (isDark) DarkTextSecondary else LightTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                }
-                                context.startActivity(intent)
-                                onRefreshPermission()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentAmber),
-                            shape = RoundedCornerShape(10.dp)
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color.Transparent,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isDark) DarkCardBorder else LightCardBorder),
+                            modifier = Modifier.clickable { showAddCategoryModal = true }
                         ) {
-                            Text("Enable Now", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Media Selector Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = if (isDark) 0.dp else 1.5.dp, shape = RoundedCornerShape(18.dp))
-                    .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(18.dp))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            "Attached Media",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = if (isDark) DarkTextPrimary else LightTextPrimary
-                        )
-                        if (mediaUri != null) {
-                            Text(
-                                "Remove",
-                                fontSize = 12.sp,
-                                color = AccentRose,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.clickable { AutomationManager.selectedMediaUri.value = null }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    if (mediaUri != null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (isDark) DarkInputBg else LightInputBg)
-                        ) {
-                            AsyncImage(
-                                model = mediaUri,
-                                contentDescription = "Media preview",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(95.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (isDark) DarkInputBg else LightInputBg)
-                                .border(1.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
-                                .clickable { mediaPickerLauncher.launch("*/*") },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(BrandEmerald.copy(alpha = 0.15f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(20.dp))
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text("Pick Photo, Video or Sticker", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-                                    Text("Tap to select from phone gallery", fontSize = 11.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
-                                }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, tint = AccentSky, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("New Folder", fontSize = 11.sp, color = AccentSky, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
                 }
             }
-        }
 
-        // 4. Caption / Message Input
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                shape = RoundedCornerShape(18.dp),
+            // 2. Main Content Area (Recipients in selected folder)
+            LazyColumn(
                 modifier = Modifier
+                    .weight(1f)
                     .fillMaxWidth()
-                    .shadow(elevation = if (isDark) 0.dp else 1.5.dp, shape = RoundedCornerShape(18.dp))
-                    .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(18.dp))
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 12.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "Caption / Message (Optional)",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = if (isDark) DarkTextPrimary else LightTextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = caption,
-                        onValueChange = { AutomationManager.captionText.value = it },
-                        placeholder = { Text("Write your message to deliver with media...", fontSize = 13.sp, color = if (isDark) DarkTextMuted else LightTextMuted) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(if (isDark) DarkInputBg else LightInputBg, RoundedCornerShape(12.dp)),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = BrandEmerald.copy(alpha = 0.5f),
-                            unfocusedBorderColor = Color.Transparent,
-                            focusedTextColor = if (isDark) DarkTextPrimary else LightTextPrimary,
-                            unfocusedTextColor = if (isDark) DarkTextPrimary else LightTextPrimary
-                        ),
-                        minLines = 2,
-                        maxLines = 4
-                    )
-                }
-            }
-        }
 
-        // 5. ⭐ PRIMARY FEATURE CARD: 1-Tap Direct WhatsApp Multi-Picker & Send
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = if (isDark) 0.dp else 2.dp, shape = RoundedCornerShape(18.dp))
-                    .border(1.dp, BrandEmerald.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(BrandEmerald.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
+                // Permission Alert (if needed)
+                if (!isAccessibilityEnabled) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.border(1.dp, AccentAmber.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                         ) {
-                            Icon(Icons.Default.Send, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(18.dp))
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text("Send via WhatsApp", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-                            Text("Pick any groups or people directly in WhatsApp", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
-                        }
-                    }
+                            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Icon(Icons.Default.LockClock, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Accessibility Permission Needed", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                    }
+                                    Text(
+                                        "Enable",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AccentAmber,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(AccentAmber.copy(alpha = 0.15f))
+                                            .clickable {
+                                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                }
+                                                context.startActivity(intent)
+                                                isAccessibilityEnabled = checkAccessibilityService(context)
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
 
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Button(
-                        onClick = { AutomationManager.openDirectWhatsAppPicker(context) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
-                    ) {
-                        Icon(Icons.Default.OpenInNew, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "Open WhatsApp & Select Groups",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isDark) DarkInputBg else LightInputBg)
+                                        .clickable { showRestrictedHelpDialog = true }
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "⚠️ Greyed out \"Restricted Setting\"? Tap to unlock",
+                                        fontSize = 11.sp,
+                                        color = AccentAmber,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        // 6. Automated Queue Manager (Optional Multi-Loop)
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = if (isDark) 0.dp else 1.5.dp, shape = RoundedCornerShape(18.dp))
-                    .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(18.dp))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                // Header for active folder
+                item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Scheduled Queue", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .background(AccentSky.copy(alpha = 0.15f))
-                                    .padding(horizontal = 7.dp, vertical = 2.dp)
-                            ) {
-                                Text("${groups.size}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AccentSky)
-                            }
-                        }
-                        if (groups.isNotEmpty()) {
+                        Text(
+                            text = if (activeFilter == "All") "All Target Chats (${recipients.size})" else "$activeFilter List (${recipients.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = if (isDark) DarkTextPrimary else LightTextPrimary
+                        )
+                        if (recipients.isNotEmpty()) {
                             Text(
                                 "Clear",
                                 fontSize = 12.sp,
                                 color = AccentRose,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.clickable { AutomationManager.clearGroups() }
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.clickable { AutomationManager.clearActiveCategoryRecipients() }
                             )
                         }
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        "Queue group names to loop through them autonomously with anti-ban delay.",
-                        fontSize = 11.sp,
-                        color = if (isDark) DarkTextMuted else LightTextMuted
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Folder Pills
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        item {
-                            LightFolderChip(
-                                label = "All",
-                                isDark = isDark,
-                                isSelected = activeFilter == "All",
-                                onClick = { AutomationManager.activeCategoryFilter.value = "All" }
-                            )
-                        }
-                        items(categories) { cat ->
-                            LightFolderChip(
-                                label = cat,
-                                isDark = isDark,
-                                isSelected = activeFilter == cat,
-                                onClick = { AutomationManager.activeCategoryFilter.value = cat }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Input group name
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = newGroupName,
-                            onValueChange = { newGroupName = it },
-                            placeholder = { Text("Group name...", fontSize = 13.sp, color = if (isDark) DarkTextMuted else LightTextMuted) },
-                            singleLine = true,
+                // Empty state if folder has no recipients
+                if (recipients.isEmpty()) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
+                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier
-                                .weight(1f)
-                                .background(if (isDark) DarkInputBg else LightInputBg, RoundedCornerShape(12.dp)),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AccentSky.copy(alpha = 0.5f),
-                                unfocusedBorderColor = Color.Transparent,
-                                focusedTextColor = if (isDark) DarkTextPrimary else LightTextPrimary,
-                                unfocusedTextColor = if (isDark) DarkTextPrimary else LightTextPrimary
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                if (newGroupName.isNotBlank()) {
-                                    val cat = if (activeFilter != "All") activeFilter else "General"
-                                    AutomationManager.addGroup(newGroupName, cat)
-                                    newGroupName = ""
-                                } else {
-                                    Toast.makeText(context, "Enter a group name first!", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentSky),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                .fillMaxWidth()
+                                .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(16.dp))
+                                .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(16.dp))
                         ) {
-                            Text("Add", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(26.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background((if (isDark) DarkInputBg else LightInputBg)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Outlined.GroupAdd, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(24.dp))
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    "No groups or friends added yet",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp,
+                                    color = if (isDark) DarkTextPrimary else LightTextPrimary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Tap the + button below to add WhatsApp groups or 1-to-1 friends to this folder.",
+                                    fontSize = 12.sp,
+                                    color = if (isDark) DarkTextSecondary else LightTextSecondary,
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = { showAddRecipientModal = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Add Recipient", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
                         }
                     }
-
-                    if (groups.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(groups) { item ->
-                                Surface(
-                                    shape = RoundedCornerShape(20.dp),
-                                    color = if (isDark) DarkInputBg else LightInputBg,
-                                    border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                } else {
+                    // Recipient Items
+                    items(recipients) { recipient ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(14.dp))
+                                .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (recipient.type == RecipientType.INDIVIDUAL) AccentSky.copy(alpha = 0.15f)
+                                                else BrandEmerald.copy(alpha = 0.15f)
+                                            ),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Text(item.name, fontSize = 12.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-                                        Spacer(modifier = Modifier.width(6.dp))
                                         Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = "Remove",
-                                            tint = if (isDark) DarkTextMuted else LightTextMuted,
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clickable { AutomationManager.removeGroup(item.name) }
+                                            imageVector = if (recipient.type == RecipientType.INDIVIDUAL) Icons.Default.Person else Icons.Default.Groups,
+                                            contentDescription = null,
+                                            tint = if (recipient.type == RecipientType.INDIVIDUAL) AccentSky else BrandEmerald,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(recipient.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                        Text(
+                                            text = if (recipient.type == RecipientType.INDIVIDUAL) "1-to-1 Private Chat • Separate DM" else "WhatsApp Group Chat",
+                                            fontSize = 11.sp,
+                                            color = if (isDark) DarkTextSecondary else LightTextSecondary
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { AutomationManager.removeRecipient(recipient.name) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = if (isDark) DarkTextMuted else LightTextMuted, modifier = Modifier.size(16.dp))
                                 }
                             }
                         }
                     }
                 }
-            }
-        }
 
-        // 7. Anti-Ban Timing
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                shape = RoundedCornerShape(18.dp),
+                // Status if active run is going on
+                if (AutomationManager.isRunning) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth().border(1.dp, BrandEmerald, RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(BrandEmerald))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Active Dispatcher Running", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = BrandEmerald)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(status.logMessage, fontSize = 12.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                if (status.step == AutomationStep.COOLDOWN_DELAY && status.delayCountdownSeconds > 0) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    LinearProgressIndicator(
+                                        progress = { status.delayCountdownSeconds.toFloat() / maxDelay.toFloat() },
+                                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+                                        color = AccentAmber,
+                                        trackColor = if (isDark) DarkInputBg else LightInputBg
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = { AutomationManager.stopBroadcast() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Stop", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+
+            // 3. Bottom Action Dock (Attached Media Preview + 1-Tap WhatsApp / Loop Buttons)
+            Surface(
+                color = if (isDark) DarkSurface else LightSurface,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(elevation = if (isDark) 0.dp else 1.5.dp, shape = RoundedCornerShape(18.dp))
-                    .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(18.dp))
+                    .shadow(elevation = 6.dp)
+                    .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(0.dp))
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Shield, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Anti-Ban Timing", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text("${minDelay}s - ${maxDelay}s", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+
+                    // Attached preview row (if any)
+                    if (mediaUri != null || caption.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isDark) DarkInputBg else LightInputBg)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    imageVector = if (mediaUri != null) Icons.Outlined.Attachment else Icons.Outlined.Chat,
+                                    contentDescription = null,
+                                    tint = BrandEmerald,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (mediaUri != null) mediaName else "Message: \"${caption.take(25)}...\"",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isDark) DarkTextPrimary else LightTextPrimary,
+                                    maxLines = 1
+                                )
+                            }
+                            Text(
+                                "Clear",
+                                fontSize = 11.sp,
+                                color = AccentRose,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.clickable {
+                                    AutomationManager.selectedMediaUri.value = null
+                                    AutomationManager.mediaFileName.value = ""
+                                    AutomationManager.captionText.value = ""
+                                }
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Randomized delay between sends simulates human pacing.",
-                        fontSize = 12.sp,
-                        color = if (isDark) DarkTextSecondary else LightTextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Slider(
-                        value = minDelay.toFloat(),
-                        onValueChange = {
-                            AutomationManager.minDelaySeconds.value = it.toInt()
-                            AutomationManager.maxDelaySeconds.value = (it.toInt() + 6).coerceAtMost(30)
-                        },
-                        valueRange = 5f..25f,
-                        steps = 4,
-                        colors = SliderDefaults.colors(
-                            thumbColor = BrandEmerald,
-                            activeTrackColor = BrandEmerald,
-                            inactiveTrackColor = if (isDark) DarkInputBg else LightInputBg
-                        )
-                    )
+
+                    // 2 Main Actions: 1-Tap Pick in WhatsApp & Auto-Loop
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Button A: Direct 1-Tap WhatsApp Picker
+                        Button(
+                            onClick = { AutomationManager.openDirectWhatsAppPicker(context) },
+                            modifier = Modifier.weight(1.2f).height(48.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Pick in WhatsApp", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                        }
+
+                        // Button B: Auto-Loop to active folder
+                        OutlinedButton(
+                            onClick = {
+                                if (!isAccessibilityEnabled) {
+                                    Toast.makeText(context, "Please enable Accessibility permission first!", Toast.LENGTH_SHORT).show()
+                                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    context.startActivity(intent)
+                                    return@OutlinedButton
+                                }
+                                AutomationManager.startBroadcast(context)
+                            },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BrandEmerald)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Auto-Send (${recipients.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = BrandEmerald)
+                        }
+                    }
+
                 }
             }
+
         }
-
     }
-}
 
-@Composable
-fun LightFolderChip(label: String, isDark: Boolean, isSelected: Boolean, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = if (isSelected) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
-        border = androidx.compose.foundation.BorderStroke(
-            0.5.dp,
-            if (isSelected) BrandEmerald.copy(alpha = 0.6f) else (if (isDark) DarkCardBorder else LightCardBorder)
-        ),
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-            color = if (isSelected) BrandEmerald else (if (isDark) DarkTextSecondary else LightTextSecondary),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+    // Modal: Action Sheet (+)
+    if (showActionSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showActionSheet = false },
+            containerColor = if (isDark) DarkSurface else LightSurface
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                Text("Compose & Add", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.AddPhotoAlternate,
+                    title = "Attach Photo / Video",
+                    subtitle = "Pick media from phone gallery",
+                    tint = BrandEmerald,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        mediaPicker.launch("image/*,video/*")
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.FilePresent,
+                    title = "Attach Document / Any File",
+                    subtitle = "Send PDF, APK, document, or audio",
+                    tint = AccentSky,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        docPicker.launch("*/*")
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.Chat,
+                    title = "Write Caption / Message",
+                    subtitle = "Attach a custom text with your broadcast",
+                    tint = AccentViolet,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showAddRecipientModal = true
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.GroupAdd,
+                    title = "Add Target Recipient",
+                    subtitle = "Add WhatsApp Group or 1-to-1 Friend",
+                    tint = AccentAmber,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showAddRecipientModal = true
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+        }
+    }
+
+    // Modal: Add Recipient & Caption
+    if (showAddRecipientModal) {
+        AddRecipientDialog(
+            isDark = isDark,
+            activeCategory = activeFilter,
+            categories = categories,
+            onDismiss = { showAddRecipientModal = false }
+        )
+    }
+
+    // Modal: Add Category
+    if (showAddCategoryModal) {
+        AddCategoryDialog(
+            isDark = isDark,
+            onDismiss = { showAddCategoryModal = false }
+        )
+    }
+
+    // Modal: Metrics & History
+    if (showMetricsModal) {
+        MetricsDialog(
+            isDark = isDark,
+            onDismiss = { showMetricsModal = false }
+        )
+    }
+
+    // Modal: Restricted Setting Guide for Android 13/14
+    if (showRestrictedHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestrictedHelpDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Unlock Restricted Setting", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Android 13/14 blocks sideloaded apps from Accessibility by default. Here is how to unlock it in 3 steps:",
+                        fontSize = 13.sp,
+                        color = if (isDark) DarkTextPrimary else LightTextPrimary
+                    )
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = if (isDark) DarkInputBg else LightInputBg),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("1️⃣ Tap \"Open App Info\" below.", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text("2️⃣ In App Info, tap the 3 dots (⋮) in the top-right corner.", fontSize = 12.sp)
+                            Text("3️⃣ Choose \"Allow restricted settings\" & enter your phone PIN / Fingerprint.", fontSize = 12.sp)
+                            Text("4️⃣ Return to Accessibility and turn ON AutoRelay!", fontSize = 12.sp, color = BrandEmerald, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        try {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Could not open App Info directly", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
+                ) {
+                    Text("Open App Info (Step 1)")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestrictedHelpDialog = false }) {
+                    Text("Close")
+                }
+            }
         )
     }
 }
 
 @Composable
-fun EditProfileModal(isDark: Boolean, onDismiss: () -> Unit) {
-    var nameInput by remember { mutableStateOf(AutomationManager.userProfileName.value) }
+fun CategoryPill(
+    label: String,
+    count: Int,
+    isSelected: Boolean,
+    isDark: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = if (isSelected) BrandEmerald else (if (isDark) DarkInputBg else LightInputBg),
+        border = androidx.compose.foundation.BorderStroke(
+            0.5.dp,
+            if (isSelected) BrandEmerald else (if (isDark) DarkCardBorder else LightCardBorder)
+        ),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) Color.White else (if (isDark) DarkTextPrimary else LightTextPrimary)
+            )
+            if (count > 0) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (isSelected) Color.White.copy(alpha = 0.25f) else (if (isDark) DarkCardBorder else LightCardBorder))
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = "$count",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isSelected) Color.White else (if (isDark) DarkTextSecondary else LightTextSecondary)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActionSheetItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    tint: Color,
+    isDark: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(tint.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+            Text(subtitle, fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+        }
+    }
+}
+
+@Composable
+fun AddRecipientDialog(
+    isDark: Boolean,
+    activeCategory: String,
+    categories: List<String>,
+    onDismiss: () -> Unit
+) {
+    var recipientName by remember { mutableStateOf("") }
+    var selectedType by remember { mutableStateOf(RecipientType.GROUP) }
+    var selectedCategory by remember { mutableStateOf(if (activeCategory == "All") "Business" else activeCategory) }
+    var captionInput by remember { mutableStateOf(AutomationManager.captionText.value) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Client / Business Profile", fontWeight = FontWeight.Bold) },
+        title = { Text("Add Recipient & Message", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
         text = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Type Switcher: Group vs 1-to-1 Friend
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isDark) DarkInputBg else LightInputBg)
+                        .padding(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selectedType == RecipientType.GROUP) BrandEmerald else Color.Transparent)
+                            .clickable { selectedType = RecipientType.GROUP }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "👥 WhatsApp Group",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (selectedType == RecipientType.GROUP) Color.White else (if (isDark) DarkTextSecondary else LightTextSecondary)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selectedType == RecipientType.INDIVIDUAL) AccentSky else Color.Transparent)
+                            .clickable { selectedType = RecipientType.INDIVIDUAL }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "👤 1-to-1 Friend (DM)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (selectedType == RecipientType.INDIVIDUAL) Color.White else (if (isDark) DarkTextSecondary else LightTextSecondary)
+                        )
+                    }
+                }
+
                 Text(
-                    "Display your or your client's name on the top dashboard card:",
-                    fontSize = 13.sp,
+                    text = if (selectedType == RecipientType.GROUP) "Enter the exact WhatsApp group name:"
+                           else "Enter friend's exact WhatsApp name (sent privately 1-on-1):",
+                    fontSize = 12.sp,
                     color = if (isDark) DarkTextSecondary else LightTextSecondary
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+
                 OutlinedTextField(
-                    value = nameInput,
-                    onValueChange = { nameInput = it },
-                    placeholder = { Text("e.g. Vishal Kumar Juni / Acme Media") },
+                    value = recipientName,
+                    onValueChange = { recipientName = it },
+                    placeholder = { Text(if (selectedType == RecipientType.GROUP) "e.g. Study Group / Project Alpha" else "e.g. Rahul Sharma") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Category selector
+                Text("Select Folder / Category:", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(categories) { cat ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (selectedCategory == cat) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (selectedCategory == cat) BrandEmerald else Color.Transparent),
+                            modifier = Modifier.clickable { selectedCategory = cat }
+                        ) {
+                            Text(cat, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = if (selectedCategory == cat) BrandEmerald else (if (isDark) DarkTextSecondary else LightTextSecondary), modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                        }
+                    }
+                }
+
+                // Optional caption edit
+                Text("Caption / Message (Optional):", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                OutlinedTextField(
+                    value = captionInput,
+                    onValueChange = { captionInput = it },
+                    placeholder = { Text("Message attached with media...") },
+                    shape = RoundedCornerShape(10.dp),
+                    minLines = 2,
+                    maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -793,14 +914,15 @@ fun EditProfileModal(isDark: Boolean, onDismiss: () -> Unit) {
         confirmButton = {
             Button(
                 onClick = {
-                    if (nameInput.isNotBlank()) {
-                        AutomationManager.userProfileName.value = nameInput.trim()
+                    if (recipientName.isNotBlank()) {
+                        AutomationManager.addRecipient(recipientName.trim(), selectedCategory, selectedType)
                     }
+                    AutomationManager.captionText.value = captionInput.trim()
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
             ) {
-                Text("Save Profile", color = Color.White, fontWeight = FontWeight.Bold)
+                Text("Save", fontWeight = FontWeight.Bold, color = Color.White)
             }
         },
         dismissButton = {
@@ -812,199 +934,123 @@ fun EditProfileModal(isDark: Boolean, onDismiss: () -> Unit) {
 }
 
 @Composable
-fun FoldersMainScreen(isDark: Boolean) {
-    val categories by AutomationManager.categories.collectAsState()
-    val allGroups by AutomationManager.targetGroups.collectAsState()
-    var newCategoryName by remember { mutableStateOf("") }
+fun AddCategoryDialog(isDark: Boolean, onDismiss: () -> Unit) {
+    var categoryName by remember { mutableStateOf("") }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Text("Folders & Presets", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text("Group contacts into targeted sets for 1-click broadcast.", fontSize = 13.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = newCategoryName,
-                onValueChange = { newCategoryName = it },
-                placeholder = { Text("New folder name...", fontSize = 13.sp, color = if (isDark) DarkTextMuted else LightTextMuted) },
-                singleLine = true,
-                modifier = Modifier
-                    .weight(1f)
-                    .background(if (isDark) DarkInputBg else LightInputBg, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AccentSky.copy(alpha = 0.5f),
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = if (isDark) DarkTextPrimary else LightTextPrimary,
-                    unfocusedTextColor = if (isDark) DarkTextPrimary else LightTextPrimary
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Create New Folder", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+        text = {
+            Column {
+                Text("Enter folder name (e.g. VIP, Study, Work):", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = categoryName,
+                    onValueChange = { categoryName = it },
+                    placeholder = { Text("Folder name...") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
                 )
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+            }
+        },
+        confirmButton = {
             Button(
                 onClick = {
-                    if (newCategoryName.isNotBlank()) {
-                        AutomationManager.addCategory(newCategoryName)
-                        newCategoryName = ""
+                    if (categoryName.isNotBlank()) {
+                        AutomationManager.addCategory(categoryName.trim())
                     }
+                    onDismiss()
                 },
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentSky),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                colors = ButtonDefaults.buttonColors(containerColor = AccentSky)
             ) {
-                Text("Create", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("Create", fontWeight = FontWeight.Bold, color = Color.White)
             }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(categories) { category ->
-                val count = allGroups.count { it.category == category }
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(14.dp))
-                        .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = AccentSky, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(category, fontWeight = FontWeight.SemiBold, color = if (isDark) DarkTextPrimary else LightTextPrimary, fontSize = 14.sp)
-                        }
-                        Text("$count groups", color = if (isDark) DarkTextSecondary else LightTextSecondary, fontSize = 12.sp)
-                    }
-                }
-            }
-        }
-    }
+    )
 }
 
 @Composable
-fun MetricsMainScreen(isDark: Boolean) {
+fun MetricsDialog(isDark: Boolean, onDismiss: () -> Unit) {
     val stats by AutomationManager.stats.collectAsState()
     val history by AutomationManager.broadcastHistory.collectAsState()
     val timeFormat = remember { SimpleDateFormat("HH:mm - dd MMM", Locale.getDefault()) }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        item {
-            Text("Performance Metrics", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text("Delivery tracking and time optimization overview.", fontSize = 13.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
-        }
-
-        // Metrics Grid
-        item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                LightMetricCard(
-                    modifier = Modifier.weight(1f),
-                    title = "Dispatched",
-                    value = stats.totalDispatched.toString(),
-                    color = AccentSky,
-                    isDark = isDark
-                )
-                LightMetricCard(
-                    modifier = Modifier.weight(1f),
-                    title = "Success Rate",
-                    value = if (stats.totalDispatched > 0) "${(stats.totalSuccess * 100) / stats.totalDispatched}%" else "100%",
-                    color = BrandEmerald,
-                    isDark = isDark
-                )
-                LightMetricCard(
-                    modifier = Modifier.weight(1f),
-                    title = "Time Saved",
-                    value = "${String.format(Locale.US, "%.1f", stats.minutesSaved)}m",
-                    color = AccentViolet,
-                    isDark = isDark
-                )
-            }
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("Activity History", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-        }
-
-        if (history.isEmpty()) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(14.dp))
-                        .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
-                ) {
-                    Box(modifier = Modifier.padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text("No broadcast activity logged yet.", fontSize = 12.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
-                    }
-                }
-            }
-        } else {
-            items(history) { record ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(14.dp))
-                        .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(record.groupName, fontWeight = FontWeight.SemiBold, color = if (isDark) DarkTextPrimary else LightTextPrimary, fontSize = 13.sp)
-                            if (record.captionPreview.isNotEmpty()) {
-                                Text("\"${record.captionPreview}\"", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary, maxLines = 1)
-                            }
-                            Text(timeFormat.format(Date(record.timestamp)), fontSize = 10.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delivery Analytics", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Card(modifier = Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Sent", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                            Text("${stats.totalDispatched}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = AccentSky)
                         }
-                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(18.dp))
+                    }
+                    Card(modifier = Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Success", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                            Text("${if (stats.totalDispatched > 0) (stats.totalSuccess * 100) / stats.totalDispatched else 100}%", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
+                        }
+                    }
+                    Card(modifier = Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Saved", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                            Text("${String.format(Locale.US, "%.1f", stats.minutesSaved)}m", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = AccentViolet)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Text("Recent Activity:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                if (history.isEmpty()) {
+                    Text("No logs yet.", fontSize = 12.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(history) { log ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isDark) DarkInputBg else LightInputBg)
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(log.groupName, fontWeight = FontWeight.Medium, fontSize = 12.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                    Text(timeFormat.format(Date(log.timestamp)), fontSize = 10.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
+                                }
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(16.dp))
+                            }
+                        }
                     }
                 }
             }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
         }
-    }
+    )
 }
 
-@Composable
-fun LightMetricCard(modifier: Modifier = Modifier, title: String, value: String, color: Color, isDark: Boolean) {
-    Card(
-        modifier = modifier
-            .shadow(elevation = if (isDark) 0.dp else 1.5.dp, shape = RoundedCornerShape(14.dp))
-            .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp)),
-        colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(title, fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary, maxLines = 1)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = color)
+private fun getFileName(context: Context, uri: Uri): String? {
+    var result: String? = null
+    if (uri.scheme == "content") {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index != -1) result = cursor.getString(index)
+            }
         }
     }
+    return result ?: uri.lastPathSegment
 }
 
 private fun checkAccessibilityService(context: Context): Boolean {
