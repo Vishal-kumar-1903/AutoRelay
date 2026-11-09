@@ -100,31 +100,75 @@ object AutomationManager {
         }
     }
 
-    fun addRecipient(name: String, category: String = "General", type: RecipientType = RecipientType.GROUP) {
+    fun addRecipient(name: String, category: String = "General", type: RecipientType = RecipientType.GROUP, context: Context? = null) {
         val trimmed = name.trim()
         if (trimmed.isNotEmpty() && targetRecipients.value.none { it.name.equals(trimmed, ignoreCase = true) }) {
-            targetRecipients.value = targetRecipients.value + TargetRecipient(trimmed, category, type)
+            targetRecipients.value = targetRecipients.value + TargetRecipient(trimmed, category, type, isSelected = true)
+            if (context != null) savePersistence(context)
         }
     }
 
-    fun removeRecipient(name: String) {
-        targetRecipients.value = targetRecipients.value.filter { it.name != name }
+    fun addMultipleRecipients(rawNames: String, category: String = "General", type: RecipientType = RecipientType.GROUP, context: Context? = null): Int {
+        val names = rawNames.split(",", "\n", ";").map { it.trim() }.filter { it.isNotEmpty() }
+        val current = targetRecipients.value.toMutableList()
+        var added = 0
+        names.forEach { n ->
+            if (current.none { it.name.equals(n, ignoreCase = true) }) {
+                current.add(TargetRecipient(n, category, type, isSelected = true))
+                added++
+            }
+        }
+        if (added > 0) {
+            targetRecipients.value = current
+            if (context != null) savePersistence(context)
+        }
+        return added
     }
 
-    fun clearActiveCategoryRecipients() {
+    fun toggleSelection(name: String, context: Context? = null) {
+        targetRecipients.value = targetRecipients.value.map {
+            if (it.name.equals(name, ignoreCase = true)) it.copy(isSelected = !it.isSelected) else it
+        }
+        if (context != null) savePersistence(context)
+    }
+
+    fun selectAllInActiveFilter(select: Boolean, context: Context? = null) {
+        val filter = activeCategoryFilter.value
+        targetRecipients.value = targetRecipients.value.map {
+            if (filter == "All" || it.category == filter) it.copy(isSelected = select) else it
+        }
+        if (context != null) savePersistence(context)
+    }
+
+    fun removeRecipient(name: String, context: Context? = null) {
+        targetRecipients.value = targetRecipients.value.filter { it.name != name }
+        if (context != null) savePersistence(context)
+    }
+
+    fun clearActiveCategoryRecipients(context: Context? = null) {
         val filter = activeCategoryFilter.value
         if (filter == "All") {
             targetRecipients.value = emptyList()
         } else {
             targetRecipients.value = targetRecipients.value.filter { it.category != filter }
         }
+        if (context != null) savePersistence(context)
     }
 
-    fun addCategory(categoryName: String) {
+    fun addCategory(categoryName: String, context: Context? = null) {
         val trimmed = categoryName.trim()
         if (trimmed.isNotEmpty() && !categories.value.contains(trimmed)) {
             categories.value = categories.value + trimmed
+            activeCategoryFilter.value = trimmed
+            if (context != null) savePersistence(context)
         }
+    }
+
+    fun deleteCategory(categoryName: String, context: Context? = null) {
+        categories.value = categories.value.filter { it != categoryName }
+        targetRecipients.value = targetRecipients.value.filter { it.category != categoryName }
+        activeCategoryFilter.value = "All"
+        if (context != null) savePersistence(context)
     }
 
     fun getFilteredRecipients(): List<TargetRecipient> {
@@ -136,8 +180,14 @@ object AutomationManager {
         }
     }
 
+    fun getActiveQueue(): List<TargetRecipient> {
+        val list = getFilteredRecipients()
+        val selected = list.filter { it.isSelected }
+        return if (selected.isNotEmpty()) selected else list
+    }
+
     fun startBroadcast(context: Context) {
-        val queue = getFilteredRecipients()
+        val queue = getActiveQueue()
         val uri = selectedMediaUri.value
         val caption = captionText.value.trim()
 
@@ -284,6 +334,18 @@ object AutomationManager {
             userProfileName.value = prefs.getString("user_profile_name", "Vishal Kumar (Active)") ?: "Vishal Kumar (Active)"
             isDarkMode.value = prefs.getBoolean("is_dark_mode", false)
 
+            val categoriesJson = prefs.getString("categories_json", null)
+            if (categoriesJson != null) {
+                val catArr = JSONArray(categoriesJson)
+                val catList = mutableListOf<String>()
+                for (i in 0 until catArr.length()) {
+                    catList.add(catArr.getString(i))
+                }
+                if (catList.isNotEmpty()) {
+                    categories.value = catList
+                }
+            }
+
             val recipientsJson = prefs.getString("recipients_json", null)
             if (recipientsJson != null) {
                 val array = JSONArray(recipientsJson)
@@ -292,7 +354,8 @@ object AutomationManager {
                     val obj = array.getJSONObject(i)
                     val typeStr = obj.optString("type", "GROUP")
                     val type = if (typeStr == "INDIVIDUAL") RecipientType.INDIVIDUAL else RecipientType.GROUP
-                    list.add(TargetRecipient(obj.getString("name"), obj.optString("category", "General"), type))
+                    val isSel = obj.optBoolean("selected", true)
+                    list.add(TargetRecipient(obj.getString("name"), obj.optString("category", "General"), type, isSel))
                 }
                 targetRecipients.value = list
             }
@@ -312,12 +375,17 @@ object AutomationManager {
             editor.putString("user_profile_name", userProfileName.value)
             editor.putBoolean("is_dark_mode", isDarkMode.value)
 
+            val catArray = JSONArray()
+            categories.value.forEach { catArray.put(it) }
+            editor.putString("categories_json", catArray.toString())
+
             val array = JSONArray()
             targetRecipients.value.forEach {
                 val obj = JSONObject()
                 obj.put("name", it.name)
                 obj.put("category", it.category)
                 obj.put("type", it.type.name)
+                obj.put("selected", it.isSelected)
                 array.put(obj)
             }
             editor.putString("recipients_json", array.toString())

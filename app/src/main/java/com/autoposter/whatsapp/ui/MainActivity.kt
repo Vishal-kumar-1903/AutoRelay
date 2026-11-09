@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.ContactsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
@@ -87,13 +88,50 @@ fun AutoRelayCleanWorkspace() {
 
     val activeFilter by AutomationManager.activeCategoryFilter.collectAsState()
     val categories by AutomationManager.categories.collectAsState()
-    val recipients = AutomationManager.getFilteredRecipients()
+    val targetRecipients by AutomationManager.targetRecipients.collectAsState()
+
+    val recipients = remember(targetRecipients, activeFilter) {
+        if (activeFilter == "All") targetRecipients
+        else targetRecipients.filter { it.category == activeFilter }
+    }
+    val selectedCount = remember(recipients) {
+        recipients.count { it.isSelected }
+    }
+
     val mediaUri by AutomationManager.selectedMediaUri.collectAsState()
     val mediaName by AutomationManager.mediaFileName.collectAsState()
     val caption by AutomationManager.captionText.collectAsState()
     val status by AutomationManager.status.collectAsState()
     val minDelay by AutomationManager.minDelaySeconds.collectAsState()
     val maxDelay by AutomationManager.maxDelaySeconds.collectAsState()
+
+    // Pick from Phone Contacts (100% standard, no typing needed!)
+    val contactPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickContact()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val cursor = context.contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.Contacts.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val nameIndex = it.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                    if (nameIndex != -1) {
+                        val name = it.getString(nameIndex)
+                        if (!name.isNullOrBlank()) {
+                            val cat = if (activeFilter == "All") "Friends" else activeFilter
+                            AutomationManager.addRecipient(name.trim(), cat, RecipientType.INDIVIDUAL, context)
+                            Toast.makeText(context, "Added \"$name\" to $cat!", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Pick Photo/Video
     val mediaPicker = rememberLauncherForActivityResult(
@@ -151,7 +189,11 @@ fun AutoRelayCleanWorkspace() {
                                     Text("PRO", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
                                 }
                             }
-                            Text("Active WhatsApp Link • Ready", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                            Text(
+                                if (isAccessibilityEnabled) "🟢 Auto-Pilot Ready" else "⚪ Direct Share Mode",
+                                fontSize = 11.sp,
+                                color = if (isAccessibilityEnabled) BrandEmerald else (if (isDark) DarkTextSecondary else LightTextSecondary)
+                            )
                         }
                     }
                 },
@@ -191,7 +233,7 @@ fun AutoRelayCleanWorkspace() {
                 .background(if (isDark) DarkBg else LightBg)
         ) {
 
-            // 1. Clean Category Pills Bar (All, Business, Study, Friends, + Add)
+            // 1. Clean Category / Group Tabs Bar
             Surface(
                 color = if (isDark) DarkSurface else LightSurface,
                 modifier = Modifier.fillMaxWidth().border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(0.dp))
@@ -204,14 +246,14 @@ fun AutoRelayCleanWorkspace() {
                     item {
                         CategoryPill(
                             label = "All",
-                            count = AutomationManager.targetRecipients.value.size,
+                            count = targetRecipients.size,
                             isSelected = activeFilter == "All",
                             isDark = isDark,
                             onClick = { AutomationManager.activeCategoryFilter.value = "All" }
                         )
                     }
                     items(categories) { cat ->
-                        val count = AutomationManager.targetRecipients.value.count { it.category == cat }
+                        val count = targetRecipients.count { it.category == cat }
                         CategoryPill(
                             label = cat,
                             count = count,
@@ -233,7 +275,7 @@ fun AutoRelayCleanWorkspace() {
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, tint = AccentSky, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("New Folder", fontSize = 11.sp, color = AccentSky, fontWeight = FontWeight.SemiBold)
+                                Text("New Group / List", fontSize = 11.sp, color = AccentSky, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -319,20 +361,43 @@ fun AutoRelayCleanWorkspace() {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = if (activeFilter == "All") "All Target Chats (${recipients.size})" else "$activeFilter List (${recipients.size})",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = if (isDark) DarkTextPrimary else LightTextPrimary
-                        )
-                        if (recipients.isNotEmpty()) {
+                        Column {
                             Text(
-                                "Clear",
-                                fontSize = 12.sp,
-                                color = AccentRose,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.clickable { AutomationManager.clearActiveCategoryRecipients() }
+                                text = if (activeFilter == "All") "All Target Chats (${recipients.size})" else "$activeFilter List (${recipients.size})",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = if (isDark) DarkTextPrimary else LightTextPrimary
                             )
+                            if (recipients.isNotEmpty()) {
+                                Text(
+                                    text = "$selectedCount of ${recipients.size} selected for broadcast",
+                                    fontSize = 11.sp,
+                                    color = BrandEmerald,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        if (recipients.isNotEmpty()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (selectedCount == recipients.size) "Deselect All" else "Select All",
+                                    fontSize = 12.sp,
+                                    color = AccentSky,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.clickable {
+                                        AutomationManager.selectAllInActiveFilter(selectedCount != recipients.size, context)
+                                    }
+                                )
+                                Text("•", color = if (isDark) DarkTextMuted else LightTextMuted)
+                                Text(
+                                    "Clear",
+                                    fontSize = 12.sp,
+                                    color = AccentRose,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.clickable { AutomationManager.clearActiveCategoryRecipients(context) }
+                                )
+                            }
                         }
                     }
                 }
@@ -349,12 +414,12 @@ fun AutoRelayCleanWorkspace() {
                                 .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(16.dp))
                         ) {
                             Column(
-                                modifier = Modifier.fillMaxWidth().padding(26.dp),
+                                modifier = Modifier.fillMaxWidth().padding(22.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size(46.dp)
                                         .clip(CircleShape)
                                         .background((if (isDark) DarkInputBg else LightInputBg)),
                                     contentAlignment = Alignment.Center
@@ -363,35 +428,49 @@ fun AutoRelayCleanWorkspace() {
                                 }
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Text(
-                                    "No groups or friends added yet",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
+                                    text = if (activeFilter == "All") "No Chats or Groups Added Yet" else "No Members in \"$activeFilter\"",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
                                     color = if (isDark) DarkTextPrimary else LightTextPrimary
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    "Tap the + button below to add WhatsApp groups or 1-to-1 friends to this folder.",
+                                    "Choose from phone contacts or type WhatsApp group names:",
                                     fontSize = 12.sp,
                                     color = if (isDark) DarkTextSecondary else LightTextSecondary,
-                                    modifier = Modifier.padding(horizontal = 16.dp),
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Button(
-                                    onClick = { showAddRecipientModal = true },
-                                    colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Add Recipient", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = { contactPickerLauncher.launch(null) },
+                                        modifier = Modifier.weight(1.2f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Pick Contacts", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { showAddRecipientModal = true },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Type / Paste", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
-                    // Recipient Items
+                    // Recipient Items with Multi-Select Checkboxes
                     items(recipients) { recipient ->
                         Card(
                             colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
@@ -399,17 +478,28 @@ fun AutoRelayCleanWorkspace() {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(14.dp))
-                                .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
+                                .border(
+                                    width = if (recipient.isSelected) 1.dp else 0.5.dp,
+                                    color = if (recipient.isSelected) BrandEmerald else (if (isDark) DarkCardBorder else LightCardBorder),
+                                    shape = RoundedCornerShape(14.dp)
+                                )
+                                .clickable { AutomationManager.toggleSelection(recipient.name, context) }
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Checkbox(
+                                        checked = recipient.isSelected,
+                                        onCheckedChange = { AutomationManager.toggleSelection(recipient.name, context) },
+                                        colors = CheckboxDefaults.colors(checkedColor = BrandEmerald)
+                                    )
+
                                     Box(
                                         modifier = Modifier
-                                            .size(36.dp)
+                                            .size(34.dp)
                                             .clip(CircleShape)
                                             .background(
                                                 if (recipient.type == RecipientType.INDIVIDUAL) AccentSky.copy(alpha = 0.15f)
@@ -421,22 +511,28 @@ fun AutoRelayCleanWorkspace() {
                                             imageVector = if (recipient.type == RecipientType.INDIVIDUAL) Icons.Default.Person else Icons.Default.Groups,
                                             contentDescription = null,
                                             tint = if (recipient.type == RecipientType.INDIVIDUAL) AccentSky else BrandEmerald,
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(17.dp)
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(recipient.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
-                                        Text(
-                                            text = if (recipient.type == RecipientType.INDIVIDUAL) "1-to-1 Private Chat • Separate DM" else "WhatsApp Group Chat",
-                                            fontSize = 11.sp,
-                                            color = if (isDark) DarkTextSecondary else LightTextSecondary
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = if (recipient.type == RecipientType.INDIVIDUAL) "1-to-1 Private DM" else "WhatsApp Group",
+                                                fontSize = 11.sp,
+                                                color = if (isDark) DarkTextSecondary else LightTextSecondary
+                                            )
+                                            if (activeFilter == "All") {
+                                                Text(" • ", fontSize = 11.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
+                                                Text(recipient.category, fontSize = 11.sp, color = BrandEmerald, fontWeight = FontWeight.Medium)
+                                            }
+                                        }
                                     }
                                 }
 
                                 IconButton(
-                                    onClick = { AutomationManager.removeRecipient(recipient.name) },
+                                    onClick = { AutomationManager.removeRecipient(recipient.name, context) },
                                     modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(Icons.Default.Close, contentDescription = "Remove", tint = if (isDark) DarkTextMuted else LightTextMuted, modifier = Modifier.size(16.dp))
@@ -541,7 +637,7 @@ fun AutoRelayCleanWorkspace() {
 
                     // 2 Main Actions: 1-Tap Pick in WhatsApp & Auto-Loop
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        // Button A: Direct 1-Tap WhatsApp Picker
+                        // Button A: Direct 1-Tap WhatsApp Picker (No Permissions Needed!)
                         Button(
                             onClick = { AutomationManager.openDirectWhatsAppPicker(context) },
                             modifier = Modifier.weight(1.2f).height(48.dp),
@@ -550,14 +646,17 @@ fun AutoRelayCleanWorkspace() {
                         ) {
                             Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Pick in WhatsApp", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                            Column {
+                                Text("Pick in WhatsApp", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                                Text("No Permission Needed", fontSize = 9.sp, color = Color.White.copy(alpha = 0.8f))
+                            }
                         }
 
                         // Button B: Auto-Loop to active folder
                         OutlinedButton(
                             onClick = {
                                 if (!isAccessibilityEnabled) {
-                                    Toast.makeText(context, "Please enable Accessibility permission first!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Auto-Send needs Accessibility to click buttons automatically. Use 'Pick in WhatsApp' for direct share!", Toast.LENGTH_LONG).show()
                                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                                     context.startActivity(intent)
                                     return@OutlinedButton
@@ -570,7 +669,10 @@ fun AutoRelayCleanWorkspace() {
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Auto-Send (${recipients.size})", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = BrandEmerald)
+                            Column {
+                                Text("Auto-Send (${selectedCount})", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = BrandEmerald)
+                                Text("Hands-free", fontSize = 9.sp, color = BrandEmerald.copy(alpha = 0.8f))
+                            }
                         }
                     }
 
@@ -587,14 +689,50 @@ fun AutoRelayCleanWorkspace() {
             containerColor = if (isDark) DarkSurface else LightSurface
         ) {
             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-                Text("Compose & Add", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                Text("Quick Actions & Compose", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
                 Spacer(modifier = Modifier.height(14.dp))
+
+                ActionSheetItem(
+                    icon = Icons.Default.PersonSearch,
+                    title = "Pick from Phone Contacts",
+                    subtitle = "1-Tap import from phone address book",
+                    tint = BrandEmerald,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        contactPickerLauncher.launch(null)
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.GroupAdd,
+                    title = "Add Group or Names (Type/Paste)",
+                    subtitle = "Add exact WhatsApp group names or paste list",
+                    tint = AccentSky,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showAddRecipientModal = true
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.CreateNewFolder,
+                    title = "Create New Group / List",
+                    subtitle = "Create custom category folder (VIP, Work, etc.)",
+                    tint = AccentViolet,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showAddCategoryModal = true
+                    }
+                )
 
                 ActionSheetItem(
                     icon = Icons.Outlined.AddPhotoAlternate,
                     title = "Attach Photo / Video",
                     subtitle = "Pick media from phone gallery",
-                    tint = BrandEmerald,
+                    tint = AccentAmber,
                     isDark = isDark,
                     onClick = {
                         showActionSheet = false
@@ -606,35 +744,11 @@ fun AutoRelayCleanWorkspace() {
                     icon = Icons.Outlined.FilePresent,
                     title = "Attach Document / Any File",
                     subtitle = "Send PDF, APK, document, or audio",
-                    tint = AccentSky,
+                    tint = BrandTealDark,
                     isDark = isDark,
                     onClick = {
                         showActionSheet = false
                         docPicker.launch("*/*")
-                    }
-                )
-
-                ActionSheetItem(
-                    icon = Icons.Outlined.Chat,
-                    title = "Write Caption / Message",
-                    subtitle = "Attach a custom text with your broadcast",
-                    tint = AccentViolet,
-                    isDark = isDark,
-                    onClick = {
-                        showActionSheet = false
-                        showAddRecipientModal = true
-                    }
-                )
-
-                ActionSheetItem(
-                    icon = Icons.Outlined.GroupAdd,
-                    title = "Add Target Recipient",
-                    subtitle = "Add WhatsApp Group or 1-to-1 Friend",
-                    tint = AccentAmber,
-                    isDark = isDark,
-                    onClick = {
-                        showActionSheet = false
-                        showAddRecipientModal = true
                     }
                 )
 
@@ -649,6 +763,7 @@ fun AutoRelayCleanWorkspace() {
             isDark = isDark,
             activeCategory = activeFilter,
             categories = categories,
+            onPickFromContacts = { contactPickerLauncher.launch(null) },
             onDismiss = { showAddRecipientModal = false }
         )
     }
@@ -813,18 +928,46 @@ fun AddRecipientDialog(
     isDark: Boolean,
     activeCategory: String,
     categories: List<String>,
+    onPickFromContacts: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     var recipientName by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf(RecipientType.GROUP) }
-    var selectedCategory by remember { mutableStateOf(if (activeCategory == "All") "Business" else activeCategory) }
+    var selectedCategory by remember { mutableStateOf(if (activeCategory == "All") "Friends" else activeCategory) }
     var captionInput by remember { mutableStateOf(AutomationManager.captionText.value) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Recipient & Message", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+        title = { Text("Add Recipients & Groups", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+
+                // 1-Tap Pick from Phone Contacts button!
+                Button(
+                    onClick = {
+                        onDismiss()
+                        onPickFromContacts()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.PersonSearch, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Pick From Phone Contacts", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = if (isDark) DarkCardBorder else LightCardBorder)
+                    Text("  OR TYPE / PASTE  ", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isDark) DarkTextMuted else LightTextMuted)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = if (isDark) DarkCardBorder else LightCardBorder)
+                }
+
                 // Type Switcher: Group vs 1-to-1 Friend
                 Row(
                     modifier = Modifier
@@ -839,7 +982,7 @@ fun AddRecipientDialog(
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (selectedType == RecipientType.GROUP) BrandEmerald else Color.Transparent)
                             .clickable { selectedType = RecipientType.GROUP }
-                            .padding(vertical = 8.dp),
+                            .padding(vertical = 7.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -855,7 +998,7 @@ fun AddRecipientDialog(
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (selectedType == RecipientType.INDIVIDUAL) AccentSky else Color.Transparent)
                             .clickable { selectedType = RecipientType.INDIVIDUAL }
-                            .padding(vertical = 8.dp),
+                            .padding(vertical = 7.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -868,23 +1011,24 @@ fun AddRecipientDialog(
                 }
 
                 Text(
-                    text = if (selectedType == RecipientType.GROUP) "Enter the exact WhatsApp group name:"
-                           else "Enter friend's exact WhatsApp name (sent privately 1-on-1):",
-                    fontSize = 12.sp,
+                    text = if (selectedType == RecipientType.GROUP) "Group name(s) (comma separated for multiple):"
+                           else "Friend name(s) (comma separated for multiple):",
+                    fontSize = 11.sp,
                     color = if (isDark) DarkTextSecondary else LightTextSecondary
                 )
 
                 OutlinedTextField(
                     value = recipientName,
                     onValueChange = { recipientName = it },
-                    placeholder = { Text(if (selectedType == RecipientType.GROUP) "e.g. Study Group / Project Alpha" else "e.g. Rahul Sharma") },
-                    singleLine = true,
+                    placeholder = { Text(if (selectedType == RecipientType.GROUP) "e.g. Study Group, Project Alpha, VIP" else "e.g. Rahul, Sneha, Mohit") },
                     shape = RoundedCornerShape(10.dp),
+                    minLines = 2,
+                    maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 // Category selector
-                Text("Select Folder / Category:", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                Text("Save in Category / List:", fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(categories) { cat ->
                         Surface(
@@ -897,32 +1041,23 @@ fun AddRecipientDialog(
                         }
                     }
                 }
-
-                // Optional caption edit
-                Text("Caption / Message (Optional):", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
-                OutlinedTextField(
-                    value = captionInput,
-                    onValueChange = { captionInput = it },
-                    placeholder = { Text("Message attached with media...") },
-                    shape = RoundedCornerShape(10.dp),
-                    minLines = 2,
-                    maxLines = 3,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (recipientName.isNotBlank()) {
-                        AutomationManager.addRecipient(recipientName.trim(), selectedCategory, selectedType)
+                        val count = AutomationManager.addMultipleRecipients(recipientName.trim(), selectedCategory, selectedType, context)
+                        Toast.makeText(context, "Saved $count target(s) to $selectedCategory!", Toast.LENGTH_SHORT).show()
                     }
-                    AutomationManager.captionText.value = captionInput.trim()
+                    if (captionInput.isNotBlank()) {
+                        AutomationManager.captionText.value = captionInput.trim()
+                    }
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
             ) {
-                Text("Save", fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Save Targets", fontWeight = FontWeight.Bold, color = Color.White)
             }
         },
         dismissButton = {
@@ -935,36 +1070,51 @@ fun AddRecipientDialog(
 
 @Composable
 fun AddCategoryDialog(isDark: Boolean, onDismiss: () -> Unit) {
+    val context = LocalContext.current
     var categoryName by remember { mutableStateOf("") }
+    val presets = listOf("VIP Clients", "Study Group", "Marketing", "College", "Family")
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Create New Folder", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+        title = { Text("Create New Group / List", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
         text = {
-            Column {
-                Text("Enter folder name (e.g. VIP, Study, Work):", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
-                Spacer(modifier = Modifier.height(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Enter a name for this group / broadcast list:", fontSize = 12.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
                 OutlinedTextField(
                     value = categoryName,
                     onValueChange = { categoryName = it },
-                    placeholder = { Text("Folder name...") },
+                    placeholder = { Text("e.g. VIP Clients, Sunday Team...") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Text("Quick suggestions:", fontSize = 11.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(presets) { p ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isDark) DarkInputBg else LightInputBg,
+                            modifier = Modifier.clickable { categoryName = p }
+                        ) {
+                            Text(p, fontSize = 10.sp, color = AccentSky, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (categoryName.isNotBlank()) {
-                        AutomationManager.addCategory(categoryName.trim())
+                        AutomationManager.addCategory(categoryName.trim(), context)
+                        Toast.makeText(context, "Created \"$categoryName\"!", Toast.LENGTH_SHORT).show()
                     }
                     onDismiss()
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = AccentSky)
+                colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
             ) {
-                Text("Create", fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Create List", fontWeight = FontWeight.Bold, color = Color.White)
             }
         },
         dismissButton = {

@@ -20,7 +20,8 @@ enum class RecipientType {
 data class TargetRecipient(
     val name: String,
     val category: String = "General",
-    val type: RecipientType = RecipientType.GROUP
+    val type: RecipientType = RecipientType.GROUP,
+    val isSelected: Boolean = true
 )
 
 data class BroadcastRecord(
