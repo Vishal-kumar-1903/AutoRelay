@@ -9,7 +9,8 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.autoposter.whatsapp.data.AutomationStep
+import android.widget.Toast
+import com.autoposter.whatsapp.data.*
 
 class WhatsAppAccessibilityService : AccessibilityService() {
 
@@ -22,20 +23,146 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     private var stepStartTime = 0L
     private var hasFinishedCurrentTarget = false
 
+    private val scannedNames = mutableSetOf<String>()
+    private var scrollCount = 0
+    private var syncStartTime = 0L
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!AutomationManager.isRunning) return
-        val currentTarget = AutomationManager.getCurrentTarget() ?: return
-
-        val now = System.currentTimeMillis()
-        if (now - lastActionTime < actionDebounceMs) return
-
         val rootNode = rootInActiveWindow ?: return
         val eventPkg = event?.packageName?.toString() ?: ""
         val rootPkg = rootNode.packageName?.toString() ?: ""
 
         if (eventPkg.contains("whatsapp") || rootPkg.contains("whatsapp")) {
+            // Check if user requested WhatsApp Group & Chat Sync
+            if (AutomationManager.isSyncingFromWhatsApp.value) {
+                handleWhatsAppSync(rootNode)
+                return
+            }
+
+            if (!AutomationManager.isRunning) return
+            val currentTarget = AutomationManager.getCurrentTarget() ?: return
+
+            val now = System.currentTimeMillis()
+            if (now - lastActionTime < actionDebounceMs) return
+
             processWhatsAppUi(rootNode, currentTarget)
         }
+    }
+
+    private fun handleWhatsAppSync(rootNode: AccessibilityNodeInfo) {
+        if (syncStartTime == 0L) {
+            syncStartTime = System.currentTimeMillis()
+            scannedNames.clear()
+            scrollCount = 0
+        }
+
+        val now = System.currentTimeMillis()
+        if (now - lastActionTime < 700L) return
+
+        val newNames = extractChatNamesFromScreen(rootNode)
+        scannedNames.addAll(newNames)
+
+        // Try scrolling down to grab more chats (up to 3 pages)
+        val scrollable = findScrollableNode(rootNode)
+        if (scrollCount < 3 && scrollable != null) {
+            scrollCount++
+            scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            lastActionTime = System.currentTimeMillis()
+            return
+        }
+
+        completeWhatsAppSync()
+    }
+
+    private fun completeWhatsAppSync() {
+        val category = AutomationManager.syncTargetCategory.value
+        val targetCat = if (category == "All") "General" else category
+        val currentRecipients = AutomationManager.targetRecipients.value.toMutableList()
+        var added = 0
+
+        scannedNames.forEach { name ->
+            val clean = name.trim()
+            if (clean.length > 1 && currentRecipients.none { it.name.equals(clean, ignoreCase = true) }) {
+                val isGroup = isLikelyGroupName(clean)
+                currentRecipients.add(TargetRecipient(clean, targetCat, if (isGroup) RecipientType.GROUP else RecipientType.INDIVIDUAL, isSelected = true))
+                added++
+            }
+        }
+
+        AutomationManager.targetRecipients.value = currentRecipients
+        AutomationManager.savePersistence(applicationContext)
+        AutomationManager.isSyncingFromWhatsApp.value = false
+        val total = scannedNames.size
+        scannedNames.clear()
+        scrollCount = 0
+        syncStartTime = 0L
+
+        mainHandler.post {
+            Toast.makeText(applicationContext, "Imported $added WhatsApp chats & groups!", Toast.LENGTH_LONG).show()
+        }
+
+        // Return to AutoRelay
+        mainHandler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }, 500)
+    }
+
+    private fun isLikelyGroupName(name: String): Boolean {
+        val keywords = listOf("group", "grp", "team", "family", "friends", "class", "batch", "club", "office", "work", "squad", "circle", "project", "gang")
+        val lower = name.lowercase()
+        return keywords.any { lower.contains(it) } || name.contains("👥") || name.contains("&") || name.split(" ").size >= 3
+    }
+
+    private fun findScrollableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isScrollable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findScrollableNode(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun extractChatNamesFromScreen(root: AccessibilityNodeInfo): List<String> {
+        val list = mutableListOf<String>()
+
+        val knownIds = listOf(
+            "conversations_row_contact_name",
+            "contactpicker_row_name",
+            "conversation_contact_name",
+            "chat_title"
+        )
+        for (idName in knownIds) {
+            val nodes1 = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/$idName")
+            nodes1.forEach { n ->
+                val text = n.text?.toString()?.trim()
+                if (!text.isNullOrBlank() && text.length in 2..50 && !list.contains(text)) {
+                    list.add(text)
+                }
+            }
+            val nodes2 = root.findAccessibilityNodeInfosByViewId("com.whatsapp.w4b:id/$idName")
+            nodes2.forEach { n ->
+                val text = n.text?.toString()?.trim()
+                if (!text.isNullOrBlank() && text.length in 2..50 && !list.contains(text)) {
+                    list.add(text)
+                }
+            }
+        }
+
+        if (list.size < 2) {
+            searchHierarchy(root) { n ->
+                val id = n.viewIdResourceName ?: ""
+                val text = n.text?.toString()?.trim() ?: ""
+                if ((id.contains("name") || id.contains("title")) && text.length in 2..45 && !list.contains(text)) {
+                    val ignore = listOf("Chats", "Updates", "Calls", "Communities", "Search", "Settings", "Yesterday", "Today")
+                    if (!ignore.contains(text) && !text.matches(Regex("\\d{1,2}:\\d{2}\\s*(am|pm)?", RegexOption.IGNORE_CASE))) {
+                        list.add(text)
+                    }
+                }
+                false
+            }
+        }
+        return list
     }
 
     private fun processWhatsAppUi(rootNode: AccessibilityNodeInfo, targetGroup: String) {

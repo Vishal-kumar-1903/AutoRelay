@@ -198,6 +198,17 @@ fun AutoRelayCleanWorkspace() {
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        if (!isAccessibilityEnabled) {
+                            Toast.makeText(context, "Please enable Accessibility to scan WhatsApp chats & groups", Toast.LENGTH_LONG).show()
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            context.startActivity(intent)
+                        } else {
+                            AutomationManager.startWhatsAppSync(context, activeFilter)
+                        }
+                    }) {
+                        Icon(Icons.Default.Sync, contentDescription = "Sync from WhatsApp", tint = BrandEmerald)
+                    }
                     IconButton(onClick = { showMetricsModal = true }) {
                         Icon(Icons.Outlined.BarChart, contentDescription = "Metrics", tint = if (isDark) DarkTextSecondary else LightTextSecondary)
                     }
@@ -444,15 +455,23 @@ fun AutoRelayCleanWorkspace() {
 
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(
-                                        onClick = { contactPickerLauncher.launch(null) },
-                                        modifier = Modifier.weight(1.2f),
+                                        onClick = {
+                                            if (!isAccessibilityEnabled) {
+                                                Toast.makeText(context, "Please enable Accessibility to scan WhatsApp groups & chats", Toast.LENGTH_LONG).show()
+                                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                                context.startActivity(intent)
+                                            } else {
+                                                AutomationManager.startWhatsAppSync(context, activeFilter)
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1.3f),
                                         colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
                                         shape = RoundedCornerShape(10.dp),
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                                     ) {
-                                        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Pick Contacts", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        Text("Pick from WhatsApp", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                     }
 
                                     OutlinedButton(
@@ -693,14 +712,20 @@ fun AutoRelayCleanWorkspace() {
                 Spacer(modifier = Modifier.height(14.dp))
 
                 ActionSheetItem(
-                    icon = Icons.Default.PersonSearch,
-                    title = "Pick from Phone Contacts",
-                    subtitle = "1-Tap import from phone address book",
+                    icon = Icons.Default.Download,
+                    title = "Pick & Sync from WhatsApp",
+                    subtitle = "Auto-scan and load your real WhatsApp groups & chats",
                     tint = BrandEmerald,
                     isDark = isDark,
                     onClick = {
                         showActionSheet = false
-                        contactPickerLauncher.launch(null)
+                        if (!isAccessibilityEnabled) {
+                            Toast.makeText(context, "Please enable Accessibility to scan WhatsApp groups & chats", Toast.LENGTH_LONG).show()
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            context.startActivity(intent)
+                        } else {
+                            AutomationManager.startWhatsAppSync(context, activeFilter)
+                        }
                     }
                 )
 
@@ -943,19 +968,25 @@ fun AddRecipientDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
 
-                // 1-Tap Pick from Phone Contacts button!
+                // 1-Tap Pick from WhatsApp Button
                 Button(
                     onClick = {
                         onDismiss()
-                        onPickFromContacts()
+                        if (!checkAccessibilityService(context)) {
+                            Toast.makeText(context, "Please enable Accessibility to scan WhatsApp chats & groups automatically", Toast.LENGTH_LONG).show()
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            context.startActivity(intent)
+                        } else {
+                            AutomationManager.startWhatsAppSync(context, selectedCategory)
+                        }
                     },
-                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Icon(Icons.Default.PersonSearch, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
+                    Icon(Icons.Default.Download, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Pick From Phone Contacts", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                    Text("📥 Pick from WhatsApp (Auto-Scan)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
                 }
 
                 Row(

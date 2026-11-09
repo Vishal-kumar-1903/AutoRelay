@@ -45,12 +45,33 @@ object AutomationManager {
     val broadcastHistory = MutableStateFlow<List<BroadcastRecord>>(emptyList())
     val stats = MutableStateFlow(BroadcastStats())
 
+    // WhatsApp Group & Chat Sync State
+    val isSyncingFromWhatsApp = MutableStateFlow(false)
+    val syncTargetCategory = MutableStateFlow("All")
+
     private var activeQueue: List<TargetRecipient> = emptyList()
 
     val isRunning: Boolean
         get() = _status.value.step != AutomationStep.IDLE &&
                 _status.value.step != AutomationStep.COMPLETED &&
                 _status.value.step != AutomationStep.ERROR
+
+    fun startWhatsAppSync(context: Context, targetCategory: String = "All") {
+        syncTargetCategory.value = targetCategory
+        isSyncingFromWhatsApp.value = true
+
+        val intent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
+            ?: context.packageManager.getLaunchIntentForPackage("com.whatsapp.w4b")
+
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            Toast.makeText(context, "Scanning WhatsApp groups and chats...", Toast.LENGTH_SHORT).show()
+        } else {
+            isSyncingFromWhatsApp.value = false
+            Toast.makeText(context, "WhatsApp is not installed on this device.", Toast.LENGTH_LONG).show()
+        }
+    }
 
     fun openDirectWhatsAppPicker(context: Context) {
         val uri = selectedMediaUri.value
