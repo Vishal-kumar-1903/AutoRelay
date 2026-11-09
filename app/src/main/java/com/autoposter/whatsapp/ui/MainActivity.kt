@@ -85,17 +85,36 @@ fun AutoRelayCleanWorkspace() {
     var showAddCategoryModal by remember { mutableStateOf(false) }
     var showMetricsModal by remember { mutableStateOf(false) }
     var showRestrictedHelpDialog by remember { mutableStateOf(false) }
+    var showMoveModal by remember { mutableStateOf(false) }
+    var showSyncChooserModal by remember { mutableStateOf(false) }
+    var itemToMove by remember { mutableStateOf<String?>(null) }
+    var typeFilter by remember { mutableStateOf("ALL") } // "ALL", "GROUPS", "INDIVIDUALS"
 
     val activeFilter by AutomationManager.activeCategoryFilter.collectAsState()
     val categories by AutomationManager.categories.collectAsState()
     val targetRecipients by AutomationManager.targetRecipients.collectAsState()
 
-    val recipients = remember(targetRecipients, activeFilter) {
-        if (activeFilter == "All") targetRecipients
-        else targetRecipients.filter { it.category == activeFilter }
+    val recipients = remember(targetRecipients, activeFilter, typeFilter) {
+        val byCat = if (activeFilter == "All") targetRecipients else targetRecipients.filter { it.category == activeFilter }
+        when (typeFilter) {
+            "GROUPS" -> byCat.filter { it.type == RecipientType.GROUP }
+            "INDIVIDUALS" -> byCat.filter { it.type == RecipientType.INDIVIDUAL }
+            else -> byCat
+        }
     }
     val selectedCount = remember(recipients) {
         recipients.count { it.isSelected }
+    }
+    val totalInCat = remember(targetRecipients, activeFilter) {
+        if (activeFilter == "All") targetRecipients.size else targetRecipients.count { it.category == activeFilter }
+    }
+    val groupCountInCat = remember(targetRecipients, activeFilter) {
+        val byCat = if (activeFilter == "All") targetRecipients else targetRecipients.filter { it.category == activeFilter }
+        byCat.count { it.type == RecipientType.GROUP }
+    }
+    val dmCountInCat = remember(targetRecipients, activeFilter) {
+        val byCat = if (activeFilter == "All") targetRecipients else targetRecipients.filter { it.category == activeFilter }
+        byCat.count { it.type == RecipientType.INDIVIDUAL }
     }
 
     val mediaUri by AutomationManager.selectedMediaUri.collectAsState()
@@ -204,7 +223,7 @@ fun AutoRelayCleanWorkspace() {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             context.startActivity(intent)
                         } else {
-                            AutomationManager.startWhatsAppSync(context, activeFilter)
+                            showSyncChooserModal = true
                         }
                     }) {
                         Icon(Icons.Default.Sync, contentDescription = "Sync from WhatsApp", tint = BrandEmerald)
@@ -413,6 +432,75 @@ fun AutoRelayCleanWorkspace() {
                     }
                 }
 
+                // Sub-Type Filters (All, Groups, 1-on-1 Chats)
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TypeFilterChip(
+                            label = "All ($totalInCat)",
+                            isSelected = typeFilter == "ALL",
+                            isDark = isDark,
+                            onClick = { typeFilter = "ALL" }
+                        )
+                        TypeFilterChip(
+                            label = "👥 Groups ($groupCountInCat)",
+                            isSelected = typeFilter == "GROUPS",
+                            isDark = isDark,
+                            onClick = { typeFilter = "GROUPS" }
+                        )
+                        TypeFilterChip(
+                            label = "👤 1-on-1 Chats ($dmCountInCat)",
+                            isSelected = typeFilter == "INDIVIDUALS",
+                            isDark = isDark,
+                            onClick = { typeFilter = "INDIVIDUALS" }
+                        )
+                    }
+                }
+
+                // Bulk Move Banner (when recipients are selected)
+                if (selectedCount > 0) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = BrandEmerald.copy(alpha = 0.12f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BrandEmerald.copy(alpha = 0.3f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "$selectedCount chat(s) selected",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = BrandEmerald
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = BrandEmerald,
+                                    modifier = Modifier.clickable {
+                                        itemToMove = null
+                                        showMoveModal = true
+                                    }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Move to Folder", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Empty state if folder has no recipients
                 if (recipients.isEmpty()) {
                     item {
@@ -461,7 +549,7 @@ fun AutoRelayCleanWorkspace() {
                                                 val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                                                 context.startActivity(intent)
                                             } else {
-                                                AutomationManager.startWhatsAppSync(context, activeFilter)
+                                                showSyncChooserModal = true
                                             }
                                         },
                                         modifier = Modifier.weight(1.3f),
@@ -523,38 +611,54 @@ fun AutoRelayCleanWorkspace() {
                                             .background(
                                                 if (recipient.type == RecipientType.INDIVIDUAL) AccentSky.copy(alpha = 0.15f)
                                                 else BrandEmerald.copy(alpha = 0.15f)
-                                            ),
+                                            )
+                                            .clickable {
+                                                AutomationManager.toggleRecipientType(recipient.name, context)
+                                            },
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = if (recipient.type == RecipientType.INDIVIDUAL) Icons.Default.Person else Icons.Default.Groups,
-                                            contentDescription = null,
+                                            contentDescription = "Toggle Group / Private DM",
                                             tint = if (recipient.type == RecipientType.INDIVIDUAL) AccentSky else BrandEmerald,
                                             modifier = Modifier.size(17.dp)
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(recipient.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
-                                                text = if (recipient.type == RecipientType.INDIVIDUAL) "1-to-1 Private DM" else "WhatsApp Group",
+                                                text = if (recipient.type == RecipientType.INDIVIDUAL) "👤 1-to-1 DM" else "👥 WhatsApp Group",
                                                 fontSize = 11.sp,
-                                                color = if (isDark) DarkTextSecondary else LightTextSecondary
+                                                color = if (recipient.type == RecipientType.INDIVIDUAL) AccentSky else BrandEmerald,
+                                                fontWeight = FontWeight.Medium
                                             )
                                             if (activeFilter == "All") {
                                                 Text(" • ", fontSize = 11.sp, color = if (isDark) DarkTextMuted else LightTextMuted)
-                                                Text(recipient.category, fontSize = 11.sp, color = BrandEmerald, fontWeight = FontWeight.Medium)
+                                                Text(recipient.category, fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
                                             }
                                         }
                                     }
                                 }
 
-                                IconButton(
-                                    onClick = { AutomationManager.removeRecipient(recipient.name, context) },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = if (isDark) DarkTextMuted else LightTextMuted, modifier = Modifier.size(16.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            itemToMove = recipient.name
+                                            showMoveModal = true
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.DriveFileMove, contentDescription = "Move to Folder", tint = AccentSky, modifier = Modifier.size(17.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = { AutomationManager.removeRecipient(recipient.name, context) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remove", tint = if (isDark) DarkTextMuted else LightTextMuted, modifier = Modifier.size(16.dp))
+                                    }
                                 }
                             }
                         }
@@ -724,7 +828,7 @@ fun AutoRelayCleanWorkspace() {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             context.startActivity(intent)
                         } else {
-                            AutomationManager.startWhatsAppSync(context, activeFilter)
+                            showSyncChooserModal = true
                         }
                     }
                 )
@@ -798,6 +902,49 @@ fun AutoRelayCleanWorkspace() {
         AddCategoryDialog(
             isDark = isDark,
             onDismiss = { showAddCategoryModal = false }
+        )
+    }
+
+    // Modal: Move Recipient(s) to Category
+    if (showMoveModal) {
+        MoveToCategoryDialog(
+            isDark = isDark,
+            categories = categories,
+            targetItemName = itemToMove,
+            selectedCount = selectedCount,
+            onMove = { destinationCat ->
+                if (itemToMove != null) {
+                    AutomationManager.moveRecipientToCategory(itemToMove!!, destinationCat, context)
+                    Toast.makeText(context, "Moved \"$itemToMove\" to $destinationCat!", Toast.LENGTH_SHORT).show()
+                } else {
+                    val count = AutomationManager.moveSelectedRecipients(destinationCat, context)
+                    Toast.makeText(context, "Moved $count chat(s) to $destinationCat!", Toast.LENGTH_SHORT).show()
+                }
+                itemToMove = null
+            },
+            onDismiss = {
+                showMoveModal = false
+                itemToMove = null
+            }
+        )
+    }
+
+    // Modal: WhatsApp / WhatsApp Business Sync Chooser
+    if (showSyncChooserModal) {
+        SyncChooserDialog(
+            isDark = isDark,
+            categories = categories,
+            activeCategory = activeFilter,
+            onStartSync = { useBusiness, targetCat ->
+                if (!isAccessibilityEnabled) {
+                    Toast.makeText(context, "Please enable Accessibility to scan WhatsApp groups & chats", Toast.LENGTH_LONG).show()
+                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    context.startActivity(intent)
+                } else {
+                    AutomationManager.startWhatsAppSync(context, targetCat, useBusiness)
+                }
+            },
+            onDismiss = { showSyncChooserModal = false }
         )
     }
 
@@ -1217,6 +1364,217 @@ fun MetricsDialog(isDark: Boolean, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+fun TypeFilterChip(
+    label: String,
+    isSelected: Boolean,
+    isDark: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (isSelected) (if (isDark) DarkCard else LightCard) else Color.Transparent,
+        border = androidx.compose.foundation.BorderStroke(
+            if (isSelected) 1.5.dp else 0.5.dp,
+            if (isSelected) BrandEmerald else (if (isDark) DarkCardBorder else LightCardBorder)
+        ),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            color = if (isSelected) BrandEmerald else (if (isDark) DarkTextSecondary else LightTextSecondary),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        )
+    }
+}
+
+@Composable
+fun MoveToCategoryDialog(
+    isDark: Boolean,
+    categories: List<String>,
+    targetItemName: String?,
+    selectedCount: Int,
+    onMove: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedCat by remember { mutableStateOf(categories.firstOrNull() ?: "General") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (targetItemName != null) "Move \"$targetItemName\" to Folder"
+                else "Move $selectedCount Chat(s) to Folder",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Select destination folder:",
+                    fontSize = 12.sp,
+                    color = if (isDark) DarkTextSecondary else LightTextSecondary
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(categories) { cat ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selectedCat == cat) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (selectedCat == cat) BrandEmerald else (if (isDark) DarkCardBorder else LightCardBorder)
+                            ),
+                            modifier = Modifier.fillMaxWidth().clickable { selectedCat = cat }
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = if (selectedCat == cat) BrandEmerald else AccentSky,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        cat,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 13.sp,
+                                        color = if (selectedCat == cat) BrandEmerald else (if (isDark) DarkTextPrimary else LightTextPrimary)
+                                    )
+                                }
+                                if (selectedCat == cat) {
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onMove(selectedCat)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
+            ) {
+                Text("Move Now", fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun SyncChooserDialog(
+    isDark: Boolean,
+    categories: List<String>,
+    activeCategory: String,
+    onStartSync: (useBusiness: Boolean, targetCategory: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var useBusiness by remember { mutableStateOf(false) }
+    var chosenCat by remember { mutableStateOf(if (activeCategory == "All") (categories.firstOrNull() ?: "General") else activeCategory) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Download, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Pick & Sync from WhatsApp", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "AutoRelay will open WhatsApp for 3 seconds, scan your real groups & contacts (0 messages sent), and bring them into your list!",
+                    fontSize = 12.sp,
+                    color = if (isDark) DarkTextSecondary else LightTextSecondary
+                )
+
+                Text("1. Choose WhatsApp Version:", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (!useBusiness) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (!useBusiness) BrandEmerald else (if (isDark) DarkCardBorder else LightCardBorder)),
+                        modifier = Modifier.weight(1f).clickable { useBusiness = false }
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Chat, contentDescription = null, tint = if (!useBusiness) BrandEmerald else (if (isDark) DarkTextMuted else LightTextMuted), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Regular WhatsApp", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (!useBusiness) BrandEmerald else (if (isDark) DarkTextPrimary else LightTextPrimary))
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (useBusiness) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (useBusiness) BrandEmerald else (if (isDark) DarkCardBorder else LightCardBorder)),
+                        modifier = Modifier.weight(1f).clickable { useBusiness = true }
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Business, contentDescription = null, tint = if (useBusiness) BrandEmerald else (if (isDark) DarkTextMuted else LightTextMuted), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("WhatsApp Business", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (useBusiness) BrandEmerald else (if (isDark) DarkTextPrimary else LightTextPrimary))
+                        }
+                    }
+                }
+
+                Text("2. Save Imported Chats Into Folder:", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(categories) { cat ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (chosenCat == cat) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (chosenCat == cat) BrandEmerald else Color.Transparent),
+                            modifier = Modifier.clickable { chosenCat = cat }
+                        ) {
+                            Text(
+                                cat,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (chosenCat == cat) BrandEmerald else (if (isDark) DarkTextSecondary else LightTextSecondary),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onStartSync(useBusiness, chosenCat)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
+            ) {
+                Text("Start Import", fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }

@@ -56,20 +56,26 @@ object AutomationManager {
                 _status.value.step != AutomationStep.COMPLETED &&
                 _status.value.step != AutomationStep.ERROR
 
-    fun startWhatsAppSync(context: Context, targetCategory: String = "All") {
+    fun startWhatsAppSync(context: Context, targetCategory: String = "All", useBusiness: Boolean = false) {
         syncTargetCategory.value = targetCategory
         isSyncingFromWhatsApp.value = true
 
-        val intent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
-            ?: context.packageManager.getLaunchIntentForPackage("com.whatsapp.w4b")
+        val pkg = if (useBusiness) "com.whatsapp.w4b" else "com.whatsapp"
+        var intent = context.packageManager.getLaunchIntentForPackage(pkg)
+
+        if (intent == null) {
+            intent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                ?: context.packageManager.getLaunchIntentForPackage("com.whatsapp.w4b")
+        }
 
         if (intent != null) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
-            Toast.makeText(context, "Scanning WhatsApp groups and chats...", Toast.LENGTH_SHORT).show()
+            val appTitle = if (pkg.contains("w4b")) "WhatsApp Business" else "WhatsApp"
+            Toast.makeText(context, "Scanning $appTitle groups and chats...", Toast.LENGTH_SHORT).show()
         } else {
             isSyncingFromWhatsApp.value = false
-            Toast.makeText(context, "WhatsApp is not installed on this device.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Neither WhatsApp nor WhatsApp Business was found.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -189,6 +195,35 @@ object AutomationManager {
         categories.value = categories.value.filter { it != categoryName }
         targetRecipients.value = targetRecipients.value.filter { it.category != categoryName }
         activeCategoryFilter.value = "All"
+        if (context != null) savePersistence(context)
+    }
+
+    fun moveSelectedRecipients(newCategory: String, context: Context? = null): Int {
+        var count = 0
+        targetRecipients.value = targetRecipients.value.map {
+            if (it.isSelected) {
+                count++
+                it.copy(category = newCategory)
+            } else it
+        }
+        if (context != null) savePersistence(context)
+        return count
+    }
+
+    fun moveRecipientToCategory(name: String, newCategory: String, context: Context? = null) {
+        targetRecipients.value = targetRecipients.value.map {
+            if (it.name.equals(name, ignoreCase = true)) it.copy(category = newCategory) else it
+        }
+        if (context != null) savePersistence(context)
+    }
+
+    fun toggleRecipientType(name: String, context: Context? = null) {
+        targetRecipients.value = targetRecipients.value.map {
+            if (it.name.equals(name, ignoreCase = true)) {
+                val newType = if (it.type == RecipientType.GROUP) RecipientType.INDIVIDUAL else RecipientType.GROUP
+                it.copy(type = newType)
+            } else it
+        }
         if (context != null) savePersistence(context)
     }
 
