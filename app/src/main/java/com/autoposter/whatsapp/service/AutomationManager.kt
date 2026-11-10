@@ -1,5 +1,7 @@
 package com.autoposter.whatsapp.service
 
+import java.util.Locale
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -23,7 +25,7 @@ object AutomationManager {
     val isDarkMode = MutableStateFlow(false) // Default Light
 
     // Categories & Recipients
-    val categories = MutableStateFlow(listOf("Business", "Study", "Friends", "Clients"))
+    val categories = MutableStateFlow(listOf("Business", "Study", "Friends", "Family"))
     val activeCategoryFilter = MutableStateFlow("All")
     val targetRecipients = MutableStateFlow<List<TargetRecipient>>(emptyList())
 
@@ -129,8 +131,9 @@ object AutomationManager {
 
     fun addRecipient(name: String, category: String = "General", type: RecipientType = RecipientType.GROUP, context: Context? = null) {
         val trimmed = name.trim()
+        val cat = if (category == "General" || category == "All") detectCategory(trimmed) else category
         if (trimmed.isNotEmpty() && targetRecipients.value.none { it.name.equals(trimmed, ignoreCase = true) }) {
-            targetRecipients.value = targetRecipients.value + TargetRecipient(trimmed, category, type, isSelected = true)
+            targetRecipients.value = targetRecipients.value + TargetRecipient(trimmed, cat, type, isSelected = true)
             if (context != null) savePersistence(context)
         }
     }
@@ -141,7 +144,8 @@ object AutomationManager {
         var added = 0
         names.forEach { n ->
             if (current.none { it.name.equals(n, ignoreCase = true) }) {
-                current.add(TargetRecipient(n, category, type, isSelected = true))
+                val cat = if (category == "General" || category == "All") detectCategory(n) else category
+                current.add(TargetRecipient(n, cat, type, isSelected = true))
                 added++
             }
         }
@@ -213,6 +217,61 @@ object AutomationManager {
     fun moveRecipientToCategory(name: String, newCategory: String, context: Context? = null) {
         targetRecipients.value = targetRecipients.value.map {
             if (it.name.equals(name, ignoreCase = true)) it.copy(category = newCategory) else it
+        }
+        if (context != null) savePersistence(context)
+    }
+
+    fun detectCategory(name: String): String {
+        val lower = name.lowercase(Locale.getDefault())
+
+        val studyKeywords = listOf(
+            "study", "notes", "class", "batch", "college", "school", "exam", "test",
+            "course", "physics", "chem", "math", "bio", "btech", "bsc", "bca", "mca",
+            "gate", "jee", "neet", "upsc", "ssc", "coaching", "student", "assignment",
+            "homework", "lecture", "syllabus", "faculty", "prof", "sir", "ma'am", "mam",
+            "cse", "ece", "engineering", "library", "univ", "university", "academy",
+            "institute", "tuition", "tutor", "sem", "semester", "lab", "degree",
+            "iit", "nit", "iim", "board", "cbse", "icse", "ugc", "phd", "alumni"
+        )
+        if (studyKeywords.any { lower.contains(it) }) return "Study"
+
+        val businessKeywords = listOf(
+            "business", "biz", "client", "customer", "office", "work", "deal", "sales",
+            "lead", "shop", "store", "market", "marketing", "agency", "firm", "company",
+            "pvt", "ltd", "corp", "b2b", "b2c", "order", "payment", "invoice", "vendor",
+            "supplier", "stock", "trade", "trading", "crypto", "invest", "buyer",
+            "wholesale", "retail", "enterprise", "startup", "boss", "hr", "manager",
+            "consulting", "service", "partner", "gst", "cargo", "logistics"
+        )
+        if (businessKeywords.any { lower.contains(it) }) return "Business"
+
+        val familyKeywords = listOf(
+            "family", "parivar", "ghar", "mom", "dad", "papa", "mummy", "bhai", "bro",
+            "sister", "sis", "didi", "bhaiya", "chacha", "chachi", "mama", "mami",
+            "kaka", "cousin", "home", "relative", "dada", "dadi", "nana", "nani",
+            "mother", "father", "brother"
+        )
+        if (familyKeywords.any { lower.contains(it) }) return "Family"
+
+        return "Friends"
+    }
+
+    fun autoCategorizeAllRecipients(context: Context? = null): Int {
+        var count = 0
+        targetRecipients.value = targetRecipients.value.map { recipient ->
+            val detected = detectCategory(recipient.name)
+            if (recipient.category != detected) {
+                count++
+                recipient.copy(category = detected)
+            } else recipient
+        }
+        if (context != null) savePersistence(context)
+        return count
+    }
+
+    fun setSelectionForNames(names: Set<String>, select: Boolean, context: Context? = null) {
+        targetRecipients.value = targetRecipients.value.map {
+            if (names.contains(it.name)) it.copy(isSelected = select) else it
         }
         if (context != null) savePersistence(context)
     }
@@ -397,9 +456,11 @@ object AutomationManager {
                 for (i in 0 until catArr.length()) {
                     catList.add(catArr.getString(i))
                 }
-                if (catList.isNotEmpty()) {
-                    categories.value = catList
+                val coreDefaults = listOf("Business", "Study", "Friends", "Family")
+                coreDefaults.forEach { d ->
+                    if (!catList.contains(d)) catList.add(d)
                 }
+                categories.value = catList
             }
 
             val recipientsJson = prefs.getString("recipients_json", null)
@@ -411,7 +472,11 @@ object AutomationManager {
                     val typeStr = obj.optString("type", "GROUP")
                     val type = if (typeStr == "INDIVIDUAL") RecipientType.INDIVIDUAL else RecipientType.GROUP
                     val isSel = obj.optBoolean("selected", true)
-                    list.add(TargetRecipient(obj.getString("name"), obj.optString("category", "General"), type, isSel))
+                    var cat = obj.optString("category", "Friends")
+                    if (cat == "General") {
+                        cat = detectCategory(obj.getString("name"))
+                    }
+                    list.add(TargetRecipient(obj.getString("name"), cat, type, isSel))
                 }
                 targetRecipients.value = list
             }

@@ -411,12 +411,25 @@ fun AutoRelayCleanWorkspace() {
                         if (recipients.isNotEmpty()) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(
+                                    "⚡ Auto-Sort",
+                                    fontSize = 12.sp,
+                                    color = AccentAmber,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable {
+                                        val count = AutomationManager.autoCategorizeAllRecipients(context)
+                                        Toast.makeText(context, "Sorted $count chats into Study, Business, Family & Friends!", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                                Text("•", color = if (isDark) DarkTextMuted else LightTextMuted)
+                                Text(
                                     text = if (selectedCount == recipients.size) "Deselect All" else "Select All",
                                     fontSize = 12.sp,
                                     color = AccentSky,
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.clickable {
-                                        AutomationManager.selectAllInActiveFilter(selectedCount != recipients.size, context)
+                                        val newSelect = selectedCount != recipients.size
+                                        val namesInView = recipients.map { it.name }.toSet()
+                                        AutomationManager.setSelectionForNames(namesInView, newSelect, context)
                                     }
                                 )
                                 Text("•", color = if (isDark) DarkTextMuted else LightTextMuted)
@@ -830,6 +843,19 @@ fun AutoRelayCleanWorkspace() {
                         } else {
                             showSyncChooserModal = true
                         }
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Default.AutoAwesome,
+                    title = "⚡ Smart Auto-Categorize",
+                    subtitle = "Automatically sort chats into Study, Business, Friends & Family",
+                    tint = AccentAmber,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        val count = AutomationManager.autoCategorizeAllRecipients(context)
+                        Toast.makeText(context, "Sorted $count chats into Study, Business, Family & Friends!", Toast.LENGTH_SHORT).show()
                     }
                 )
 
@@ -1491,7 +1517,10 @@ fun SyncChooserDialog(
     onDismiss: () -> Unit
 ) {
     var useBusiness by remember { mutableStateOf(false) }
-    var chosenCat by remember { mutableStateOf(if (activeCategory == "All") (categories.firstOrNull() ?: "General") else activeCategory) }
+    var chosenCat by remember { mutableStateOf(if (activeCategory == "All") "⚡ Auto-Sort (Smart)" else activeCategory) }
+    val displayCategories = remember(categories) {
+        listOf("⚡ Auto-Sort (Smart)") + categories
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1542,8 +1571,15 @@ fun SyncChooserDialog(
 
                 Text("2. Save Imported Chats Into Folder:", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
 
+                Text(
+                    "💡 Auto-Sort detects Study groups, Business clients, & Friends automatically!",
+                    fontSize = 11.sp,
+                    color = BrandEmerald,
+                    fontWeight = FontWeight.Medium
+                )
+
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(categories) { cat ->
+                    items(displayCategories) { cat ->
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = if (chosenCat == cat) BrandEmerald.copy(alpha = 0.15f) else (if (isDark) DarkInputBg else LightInputBg),
@@ -1565,7 +1601,8 @@ fun SyncChooserDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    onStartSync(useBusiness, chosenCat)
+                    val finalCat = if (chosenCat.startsWith("⚡") || chosenCat.startsWith("Auto")) "All" else chosenCat
+                    onStartSync(useBusiness, finalCat)
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)

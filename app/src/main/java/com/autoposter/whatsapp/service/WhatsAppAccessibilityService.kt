@@ -76,7 +76,6 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     private fun completeWhatsAppSync() {
         val category = AutomationManager.syncTargetCategory.value
-        val targetCat = if (category == "All") "General" else category
         val currentRecipients = AutomationManager.targetRecipients.value.toMutableList()
         var added = 0
 
@@ -84,12 +83,23 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             val clean = name.trim()
             if (clean.length > 1 && currentRecipients.none { it.name.equals(clean, ignoreCase = true) }) {
                 val isGroup = isLikelyGroupName(clean)
-                currentRecipients.add(TargetRecipient(clean, targetCat, if (isGroup) RecipientType.GROUP else RecipientType.INDIVIDUAL, isSelected = true))
+                // When category is "All" or "Auto", intelligently sort into Study, Business, Friends, or Family!
+                val assignedCat = if (category == "All" || category.startsWith("⚡") || category.startsWith("Auto")) {
+                    AutomationManager.detectCategory(clean)
+                } else {
+                    category
+                }
+                currentRecipients.add(TargetRecipient(clean, assignedCat, if (isGroup) RecipientType.GROUP else RecipientType.INDIVIDUAL, isSelected = true))
                 added++
             }
         }
 
-        AutomationManager.targetRecipients.value = currentRecipients
+        // Upgrade any legacy "General" items
+        val cleaned = currentRecipients.map {
+            if (it.category == "General") it.copy(category = AutomationManager.detectCategory(it.name)) else it
+        }
+
+        AutomationManager.targetRecipients.value = cleaned
         AutomationManager.savePersistence(applicationContext)
         AutomationManager.isSyncingFromWhatsApp.value = false
         val total = scannedNames.size
@@ -98,7 +108,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         syncStartTime = 0L
 
         mainHandler.post {
-            Toast.makeText(applicationContext, "Imported $added WhatsApp chats & groups!", Toast.LENGTH_LONG).show()
+            Toast.makeText(applicationContext, "Imported $added WhatsApp chats & groups! Auto-sorted into Study, Business, Family & Friends.", Toast.LENGTH_LONG).show()
         }
 
         // Return to AutoRelay
