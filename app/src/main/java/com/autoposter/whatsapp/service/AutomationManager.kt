@@ -62,22 +62,77 @@ object AutomationManager {
         syncTargetCategory.value = targetCategory
         isSyncingFromWhatsApp.value = true
 
-        val pkg = if (useBusiness) "com.whatsapp.w4b" else "com.whatsapp"
-        var intent = context.packageManager.getLaunchIntentForPackage(pkg)
+        val preferredPkg = if (useBusiness) "com.whatsapp.w4b" else "com.whatsapp"
+        val fallbackPkg = if (useBusiness) "com.whatsapp" else "com.whatsapp.w4b"
+        val packagesToTry = listOf(preferredPkg, fallbackPkg)
+        var launched = false
 
-        if (intent == null) {
-            intent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
-                ?: context.packageManager.getLaunchIntentForPackage("com.whatsapp.w4b")
+        for (pkg in packagesToTry) {
+            // Strategy 1: Standard launch intent from PackageManager
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
+            if (launchIntent != null) {
+                try {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    context.startActivity(launchIntent)
+                    launched = true
+                    val appTitle = if (pkg.contains("w4b")) "WhatsApp Business" else "WhatsApp"
+                    Toast.makeText(context, "Scanning $appTitle groups and chats...", Toast.LENGTH_SHORT).show()
+                    break
+                } catch (_: Exception) {}
+            }
+
+            // Strategy 2: Direct MAIN Launcher Intent
+            try {
+                val directIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    setPackage(pkg)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+                context.startActivity(directIntent)
+                launched = true
+                val appTitle = if (pkg.contains("w4b")) "WhatsApp Business" else "WhatsApp"
+                Toast.makeText(context, "Scanning $appTitle groups and chats...", Toast.LENGTH_SHORT).show()
+                break
+            } catch (_: Exception) {}
+
+            // Strategy 3: Known HomeActivity Component
+            val commonActivities = listOf(
+                "$pkg.HomeActivity",
+                "$pkg.Main",
+                "$pkg.Conversation"
+            )
+            for (act in commonActivities) {
+                try {
+                    val compIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_LAUNCHER)
+                        setClassName(pkg, act)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    }
+                    context.startActivity(compIntent)
+                    launched = true
+                    val appTitle = if (pkg.contains("w4b")) "WhatsApp Business" else "WhatsApp"
+                    Toast.makeText(context, "Scanning $appTitle groups and chats...", Toast.LENGTH_SHORT).show()
+                    break
+                } catch (_: Exception) {}
+            }
+            if (launched) break
         }
 
-        if (intent != null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            val appTitle = if (pkg.contains("w4b")) "WhatsApp Business" else "WhatsApp"
-            Toast.makeText(context, "Scanning $appTitle groups and chats...", Toast.LENGTH_SHORT).show()
-        } else {
+        if (!launched) {
+            // Strategy 4: Custom URI scheme
+            try {
+                val uriIntent = Intent(Intent.ACTION_VIEW, Uri.parse("whatsapp://app")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(uriIntent)
+                launched = true
+                Toast.makeText(context, "Scanning WhatsApp groups and chats...", Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {}
+        }
+
+        if (!launched) {
             isSyncingFromWhatsApp.value = false
-            Toast.makeText(context, "Neither WhatsApp nor WhatsApp Business was found.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Could not open WhatsApp. Please ensure WhatsApp is installed.", Toast.LENGTH_LONG).show()
         }
     }
 
