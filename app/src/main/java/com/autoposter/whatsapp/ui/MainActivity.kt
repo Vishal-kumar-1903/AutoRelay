@@ -89,18 +89,21 @@ fun AutoRelayCleanWorkspace() {
     var showSyncChooserModal by remember { mutableStateOf(false) }
     var itemToMove by remember { mutableStateOf<String?>(null) }
     var typeFilter by remember { mutableStateOf("ALL") } // "ALL", "GROUPS", "INDIVIDUALS"
+    var searchQuery by remember { mutableStateOf("") }
 
     val activeFilter by AutomationManager.activeCategoryFilter.collectAsState()
     val categories by AutomationManager.categories.collectAsState()
     val targetRecipients by AutomationManager.targetRecipients.collectAsState()
 
-    val recipients = remember(targetRecipients, activeFilter, typeFilter) {
+    val recipients = remember(targetRecipients, activeFilter, typeFilter, searchQuery) {
         val byCat = if (activeFilter == "All") targetRecipients else targetRecipients.filter { it.category == activeFilter }
-        when (typeFilter) {
+        val byType = when (typeFilter) {
             "GROUPS" -> byCat.filter { it.type == RecipientType.GROUP }
             "INDIVIDUALS" -> byCat.filter { it.type == RecipientType.INDIVIDUAL }
             else -> byCat
         }
+        if (searchQuery.isBlank()) byType
+        else byType.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
     }
     val selectedCount = remember(recipients) {
         recipients.count { it.isSelected }
@@ -485,6 +488,34 @@ fun AutoRelayCleanWorkspace() {
                             onClick = { typeFilter = "INDIVIDUALS" }
                         )
                     }
+                }
+
+                // In-App Fast Search Bar
+                item {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Search by name or number...", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = "Search", tint = BrandEmerald, modifier = Modifier.size(18.dp))
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = if (isDark) DarkCard else LightCard,
+                            unfocusedContainerColor = if (isDark) DarkCard else LightCard,
+                            focusedBorderColor = BrandEmerald,
+                            unfocusedBorderColor = if (isDark) DarkCardBorder else LightCardBorder
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
                 // Bulk Move Banner (when recipients are selected)

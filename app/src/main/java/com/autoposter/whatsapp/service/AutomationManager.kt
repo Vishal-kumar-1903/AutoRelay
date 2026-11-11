@@ -478,11 +478,43 @@ object AutomationManager {
         }
     }
 
+    fun getFormattedMessageForTarget(targetName: String, isGroup: Boolean): String {
+        var text = captionText.value.trim()
+        if (text.isEmpty()) return ""
+
+        val displayName = if (isGroup) {
+            targetName
+        } else {
+            targetName.split(" ").firstOrNull { it.isNotBlank() } ?: targetName
+        }
+
+        // 1. Name Tag replacement
+        text = text.replace("{name}", displayName, ignoreCase = true)
+
+        // 2. Spintax variations: e.g. {Hello|Hi|Hey}
+        val spintaxRegex = Regex("\\{([^{}]+)\\}")
+        var iterations = 0
+        while (spintaxRegex.containsMatchIn(text) && iterations < 10) {
+            val match = spintaxRegex.find(text) ?: break
+            val inner = match.groupValues[1]
+            if (inner.contains("|")) {
+                val options = inner.split("|")
+                val chosen = options.random().trim()
+                text = text.replaceRange(match.range, chosen)
+            } else {
+                break
+            }
+            iterations++
+        }
+
+        return text
+    }
+
     private fun dispatchToRecipient(context: Context, index: Int) {
         val uri = selectedMediaUri.value
         val recipient = activeQueue[index]
         val isPrivate = recipient.type == RecipientType.INDIVIDUAL
-        val caption = captionText.value.trim()
+        val caption = getFormattedMessageForTarget(recipient.name, recipient.type == RecipientType.GROUP)
 
         _status.value = AutomationStatus(
             step = AutomationStep.INITIATED,

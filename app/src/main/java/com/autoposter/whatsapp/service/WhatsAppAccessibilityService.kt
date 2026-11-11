@@ -352,7 +352,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
             if (isMediaPreviewScreen) {
                 // We are on Media Preview Screen!
                 // Fill caption if present
-                val caption = AutomationManager.captionText.value.trim()
+                val caption = AutomationManager.getFormattedMessageForTarget(targetGroup, AutomationManager.getCurrentRecipientType() == RecipientType.GROUP)
                 if (caption.isNotEmpty()) {
                     val captionField = findNodeByShortId(rootNode, "caption")
                         ?: findNodeByShortId(rootNode, "entry")
