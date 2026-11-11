@@ -50,9 +50,14 @@ import java.util.*
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val ACTION_EXECUTE_SCHEDULED_BROADCAST = "com.autoposter.whatsapp.ACTION_EXECUTE_SCHEDULED_BROADCAST"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AutomationManager.loadPersistence(this)
+        handleIncomingIntent(intent)
 
         setContent {
             val isDark by AutomationManager.isDarkMode.collectAsState()
@@ -63,6 +68,21 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AutoRelayCleanWorkspace()
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent?.action == ACTION_EXECUTE_SCHEDULED_BROADCAST) {
+            val count = AutomationManager.getActiveQueue().size
+            if (count > 0) {
+                Toast.makeText(this, "⏰ Scheduled time reached! Starting broadcast to $count chats...", Toast.LENGTH_LONG).show()
+                AutomationManager.startBroadcast(this)
             }
         }
     }
@@ -87,6 +107,10 @@ fun AutoRelayCleanWorkspace() {
     var showRestrictedHelpDialog by remember { mutableStateOf(false) }
     var showMoveModal by remember { mutableStateOf(false) }
     var showSyncChooserModal by remember { mutableStateOf(false) }
+    var showScheduleModal by remember { mutableStateOf(false) }
+    var showTemplatesModal by remember { mutableStateOf(false) }
+    var showSafetyModal by remember { mutableStateOf(false) }
+    var showCsvImportModal by remember { mutableStateOf(false) }
     var itemToMove by remember { mutableStateOf<String?>(null) }
     var typeFilter by remember { mutableStateOf("ALL") } // "ALL", "GROUPS", "INDIVIDUALS"
     var searchQuery by remember { mutableStateOf("") }
@@ -94,6 +118,10 @@ fun AutoRelayCleanWorkspace() {
     val activeFilter by AutomationManager.activeCategoryFilter.collectAsState()
     val categories by AutomationManager.categories.collectAsState()
     val targetRecipients by AutomationManager.targetRecipients.collectAsState()
+    val isScheduleActive by AutomationManager.isScheduleActive.collectAsState()
+    val scheduledTimestamp by AutomationManager.scheduledTimestamp.collectAsState()
+    val scheduleRepeatDaily by AutomationManager.scheduleRepeatDaily.collectAsState()
+    val scheduledTargetCategory by AutomationManager.scheduledTargetCategory.collectAsState()
 
     val recipients = remember(targetRecipients, activeFilter, typeFilter, searchQuery) {
         val byCat = if (activeFilter == "All") targetRecipients else targetRecipients.filter { it.category == activeFilter }
@@ -176,6 +204,45 @@ fun AutoRelayCleanWorkspace() {
             val type = context.contentResolver.getType(uri) ?: "*/*"
             AutomationManager.mediaMimeType.value = type
             AutomationManager.mediaFileName.value = getFileName(context, uri) ?: "Document File"
+        }
+    }
+
+    // Pick CSV / Text File for Bulk Import
+    val csvPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val inputStream = context.contentResolver.openInputStream(uri)
+                val text = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (text.isNotBlank()) {
+                    val added = AutomationManager.importFromCsvOrText(context, text, activeFilter)
+                    Toast.makeText(context, "Imported $added contacts from file into $activeFilter!", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Selected file is empty.", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to read file: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    var currentTimeMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(isScheduleActive) {
+        if (isScheduleActive) {
+            while (true) {
+                currentTimeMillis = System.currentTimeMillis()
+                val targetTime = AutomationManager.scheduledTimestamp.value
+                if (targetTime != null && currentTimeMillis >= targetTime) {
+                    AutomationManager.onScheduleTriggered(context)
+                    if (checkAccessibilityService(context)) {
+                        Toast.makeText(context, "⏰ Scheduled time reached! Dispatching broadcast now...", Toast.LENGTH_LONG).show()
+                        AutomationManager.startBroadcast(context)
+                    }
+                    break
+                }
+                kotlinx.coroutines.delay(1000)
+            }
         }
     }
 
@@ -518,6 +585,278 @@ fun AutoRelayCleanWorkspace() {
                     )
                 }
 
+                // Scheduled Broadcast Active Countdown Card
+                if (isScheduleActive && scheduledTimestamp != null) {
+                    item {
+                        val remainingMillis = (scheduledTimestamp!! - currentTimeMillis).coerceAtLeast(0L)
+                        val remainingHours = remainingMillis / (1000 * 60 * 60)
+                        val remainingMinutes = (remainingMillis % (1000 * 60 * 60)) / (1000 * 60)
+                        val remainingSeconds = (remainingMillis % (1000 * 60)) / 1000
+                        val countdownStr = String.format(Locale.getDefault(), "%02dh %02dm %02ds", remainingHours, remainingMinutes, remainingSeconds)
+
+                        val schedDate = remember(scheduledTimestamp) {
+                            SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(scheduledTimestamp!!))
+                        }
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = AccentAmber.copy(alpha = 0.12f)),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, AccentAmber, RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clip(CircleShape)
+                                                .background(AccentAmber),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Default.Schedule, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                "⏰ Scheduled Broadcast",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = AccentAmber
+                                            )
+                                            Text(
+                                                "Target: $scheduledTargetCategory ${if (scheduleRepeatDaily) "(Daily)" else ""}",
+                                                fontSize = 10.sp,
+                                                color = if (isDark) DarkTextSecondary else LightTextSecondary
+                                            )
+                                        }
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(AccentAmber.copy(alpha = 0.2f))
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            countdownStr,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = AccentAmber
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "Set for: $schedDate. Will automatically start sending when countdown finishes.",
+                                    fontSize = 11.sp,
+                                    color = if (isDark) DarkTextPrimary else LightTextPrimary
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            AutomationManager.cancelSchedule(context)
+                                            AutomationManager.startBroadcast(context)
+                                        },
+                                        modifier = Modifier.weight(1.2f).height(36.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Send Now Immediately", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            AutomationManager.cancelSchedule(context)
+                                            Toast.makeText(context, "Scheduled broadcast cancelled.", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.weight(0.8f).height(36.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, AccentRose),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Cancel", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Dedicated Message Composer & Personalization Card
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = if (isDark) DarkCard else LightCard),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .shadow(elevation = if (isDark) 0.dp else 1.dp, shape = RoundedCornerShape(14.dp))
+                            .border(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder, RoundedCornerShape(14.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Outlined.Chat, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Broadcast Message", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = BrandEmerald.copy(alpha = 0.12f),
+                                        modifier = Modifier.clickable { showTemplatesModal = true }
+                                    ) {
+                                        Row(modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Outlined.Description, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(12.dp))
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text("Templates", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = AccentAmber.copy(alpha = 0.12f),
+                                        modifier = Modifier.clickable { showSafetyModal = true }
+                                    ) {
+                                        Row(modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Outlined.Shield, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(12.dp))
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text("Anti-Ban", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AccentAmber)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OutlinedTextField(
+                                value = caption,
+                                onValueChange = { AutomationManager.captionText.value = it },
+                                placeholder = {
+                                    Text("Type message... Use {name} for contact name, {Hi|Hello} for variations", fontSize = 12.sp)
+                                },
+                                minLines = 2,
+                                maxLines = 4,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = if (isDark) DarkInputBg else LightInputBg,
+                                    unfocusedContainerColor = if (isDark) DarkInputBg else LightInputBg,
+                                    focusedBorderColor = BrandEmerald,
+                                    unfocusedBorderColor = if (isDark) DarkCardBorder else LightCardBorder
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Quick Insertion Chips
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isDark) DarkInputBg else LightInputBg,
+                                        border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder),
+                                        modifier = Modifier.clickable {
+                                            AutomationManager.captionText.value = (caption + " {name}").trimStart()
+                                        }
+                                    ) {
+                                        Text("+ {name}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AccentSky, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    }
+                                }
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isDark) DarkInputBg else LightInputBg,
+                                        border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder),
+                                        modifier = Modifier.clickable {
+                                            AutomationManager.captionText.value = (caption + " {Hi|Hello|Hey}").trimStart()
+                                        }
+                                    ) {
+                                        Text("+ {Hi|Hello}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = BrandEmerald, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    }
+                                }
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isDark) DarkInputBg else LightInputBg,
+                                        border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder),
+                                        modifier = Modifier.clickable {
+                                            AutomationManager.captionText.value = (caption + " {Thanks|Regards|Best}").trimStart()
+                                        }
+                                    ) {
+                                        Text("+ {Thanks|Regards}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AccentViolet, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    }
+                                }
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isDark) DarkInputBg else LightInputBg,
+                                        border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) DarkCardBorder else LightCardBorder),
+                                        modifier = Modifier.clickable {
+                                            mediaPicker.launch("image/*,video/*")
+                                        }
+                                    ) {
+                                        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(12.dp))
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(if (mediaUri != null) "Change Photo" else "+ Photo/Video", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AccentAmber)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Real-time Preview Box
+                            if (caption.isNotBlank()) {
+                                val previewTarget = recipients.firstOrNull()?.name ?: "Harsh"
+                                val isPreviewGroup = recipients.firstOrNull()?.type == RecipientType.GROUP
+                                val previewResolved = remember(caption, previewTarget) {
+                                    AutomationManager.getFormattedMessageForTarget(previewTarget, isPreviewGroup)
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = BrandEmerald.copy(alpha = 0.08f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("👁️ Live Preview (for $previewTarget):", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            previewResolved,
+                                            fontSize = 11.sp,
+                                            color = if (isDark) DarkTextPrimary else LightTextPrimary,
+                                            maxLines = 2
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Bulk Move Banner (when recipients are selected)
                 if (selectedCount > 0) {
                     item {
@@ -817,20 +1156,24 @@ fun AutoRelayCleanWorkspace() {
                         Spacer(modifier = Modifier.height(10.dp))
                     }
 
-                    // 2 Main Actions: 1-Tap Pick in WhatsApp & Auto-Loop
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // 3 Main Actions: 1-Tap Pick in WhatsApp, Auto-Send & Timer Schedule
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         // Button A: Direct 1-Tap WhatsApp Picker (No Permissions Needed!)
                         Button(
                             onClick = { AutomationManager.openDirectWhatsAppPicker(context) },
-                            modifier = Modifier.weight(1.2f).height(48.dp),
+                            modifier = Modifier.weight(1.1f).height(48.dp),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
                         ) {
                             Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Column {
-                                Text("Pick in WhatsApp", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
-                                Text("No Permission Needed", fontSize = 9.sp, color = Color.White.copy(alpha = 0.8f))
+                                Text("Pick in WhatsApp", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
+                                Text("No Permission", fontSize = 8.sp, color = Color.White.copy(alpha = 0.8f))
                             }
                         }
 
@@ -849,11 +1192,40 @@ fun AutoRelayCleanWorkspace() {
                             shape = RoundedCornerShape(12.dp),
                             border = androidx.compose.foundation.BorderStroke(1.dp, BrandEmerald)
                         ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Column {
-                                Text("Auto-Send (${selectedCount})", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = BrandEmerald)
-                                Text("Hands-free", fontSize = 9.sp, color = BrandEmerald.copy(alpha = 0.8f))
+                                Text("Auto-Send (${selectedCount})", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = BrandEmerald)
+                                Text("Hands-free", fontSize = 8.sp, color = BrandEmerald.copy(alpha = 0.8f))
+                            }
+                        }
+
+                        // Button C: ⏰ Schedule Timer Button
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isScheduleActive) AccentAmber else (if (isDark) DarkInputBg else LightInputBg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isScheduleActive) AccentAmber else (if (isDark) DarkCardBorder else LightCardBorder)),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .clickable { showScheduleModal = true }
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Default.Schedule,
+                                    contentDescription = "Schedule Broadcast",
+                                    tint = if (isScheduleActive) Color.White else (if (isDark) DarkTextPrimary else LightTextPrimary),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    "Timer",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isScheduleActive) Color.White else (if (isDark) DarkTextSecondary else LightTextSecondary)
+                                )
                             }
                         }
                     }
@@ -950,6 +1322,54 @@ fun AutoRelayCleanWorkspace() {
                     onClick = {
                         showActionSheet = false
                         docPicker.launch("*/*")
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Default.Schedule,
+                    title = "⏰ Schedule Broadcast Timer",
+                    subtitle = "Set exact alarm or daily morning auto-dispatch",
+                    tint = AccentAmber,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showScheduleModal = true
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Default.DriveFolderUpload,
+                    title = "📁 Bulk Import from CSV / Text File",
+                    subtitle = "Import 50+ contacts from .csv, .txt, or excel list",
+                    tint = BrandEmerald,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showCsvImportModal = true
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.Description,
+                    title = "📋 Message Templates",
+                    subtitle = "Study notices, business deals & greetings",
+                    tint = AccentSky,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showTemplatesModal = true
+                    }
+                )
+
+                ActionSheetItem(
+                    icon = Icons.Outlined.Shield,
+                    title = "🛡️ Anti-Ban Safety Controls",
+                    subtitle = "Configure Fast, Balanced, or Ultra-Safe delay",
+                    tint = AccentViolet,
+                    isDark = isDark,
+                    onClick = {
+                        showActionSheet = false
+                        showSafetyModal = true
                     }
                 )
 
@@ -1082,6 +1502,61 @@ fun AutoRelayCleanWorkspace() {
                     Text("Close")
                 }
             }
+        )
+    }
+
+    // Modal: Schedule Broadcast Dialog
+    if (showScheduleModal) {
+        ScheduleBroadcastDialog(
+            isDark = isDark,
+            categories = categories,
+            activeCategory = activeFilter,
+            onSchedule = { triggerMillis, targetCat, repeatDaily ->
+                AutomationManager.scheduleBroadcast(context, triggerMillis, targetCat, repeatDaily)
+                val schedStr = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(triggerMillis))
+                Toast.makeText(context, "⏰ Scheduled for $schedStr (${if (repeatDaily) "Repeats Daily" else "One-time"})!", Toast.LENGTH_LONG).show()
+            },
+            onDismiss = { showScheduleModal = false }
+        )
+    }
+
+    // Modal: Message Templates
+    if (showTemplatesModal) {
+        TemplatesDialog(
+            isDark = isDark,
+            onSelectTemplate = { text ->
+                AutomationManager.captionText.value = text
+                Toast.makeText(context, "Template applied to message!", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showTemplatesModal = false }
+        )
+    }
+
+    // Modal: Anti-Ban Safety Controls
+    if (showSafetyModal) {
+        SafetySettingsDialog(
+            isDark = isDark,
+            currentMin = minDelay,
+            currentMax = maxDelay,
+            onSelectMode = { mode ->
+                AutomationManager.setSafetyMode(mode, context)
+                Toast.makeText(context, "Safety mode set to ${mode.label}!", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showSafetyModal = false }
+        )
+    }
+
+    // Modal: Bulk CSV / Text File Import
+    if (showCsvImportModal) {
+        CsvImportDialog(
+            isDark = isDark,
+            activeCategory = activeFilter,
+            onPickFile = { csvPicker.launch("text/*") },
+            onPasteImport = { pastedText ->
+                val added = AutomationManager.importFromCsvOrText(context, pastedText, activeFilter)
+                Toast.makeText(context, "Imported $added contacts into $activeFilter!", Toast.LENGTH_LONG).show()
+            },
+            onDismiss = { showCsvImportModal = false }
         )
     }
 }
@@ -1679,4 +2154,371 @@ private fun checkAccessibilityService(context: Context): Boolean {
     val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return false
     val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
     return enabledServices.any { it.resolveInfo.serviceInfo.packageName == context.packageName }
+}
+
+@Composable
+fun ScheduleBroadcastDialog(
+    isDark: Boolean,
+    categories: List<String>,
+    activeCategory: String,
+    onSchedule: (triggerMillis: Long, targetCategory: String, repeatDaily: Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedMinutesFromNow by remember { mutableStateOf(15) }
+    var selectedCategory by remember { mutableStateOf(if (activeCategory == "All") "All" else activeCategory) }
+    var repeatDaily by remember { mutableStateOf(false) }
+
+    val presets = listOf(
+        Pair("⏱️ In 5 Mins", 5),
+        Pair("⏱️ In 15 Mins", 15),
+        Pair("⏱️ In 30 Mins", 30),
+        Pair("⏰ In 1 Hour", 60),
+        Pair("⏰ In 2 Hours", 120),
+        Pair("🌅 Tomorrow 9 AM", -1)
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Schedule, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Schedule Broadcast Timer", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Choose when AutoRelay should automatically dispatch messages to your WhatsApp chats:",
+                    fontSize = 12.sp,
+                    color = if (isDark) DarkTextSecondary else LightTextSecondary
+                )
+
+                // Presets
+                Text("Quick Timing Presets:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(presets) { preset ->
+                        val isSelected = selectedMinutesFromNow == preset.second
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) AccentAmber else (if (isDark) DarkInputBg else LightInputBg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) AccentAmber else (if (isDark) DarkCardBorder else LightCardBorder)),
+                            modifier = Modifier.clickable { selectedMinutesFromNow = preset.second }
+                        ) {
+                            Text(
+                                preset.first,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else (if (isDark) DarkTextPrimary else LightTextPrimary),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Target Folder
+                Text("Target Broadcast Folder:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val allFolders = listOf("All") + categories
+                    items(allFolders) { folder ->
+                        val isSel = selectedCategory == folder
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSel) BrandEmerald else (if (isDark) DarkInputBg else LightInputBg),
+                            modifier = Modifier.clickable { selectedCategory = folder }
+                        ) {
+                            Text(
+                                folder,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSel) Color.White else (if (isDark) DarkTextSecondary else LightTextSecondary),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Repeat Daily Switch
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isDark) DarkInputBg else LightInputBg)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Repeat Daily", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                        Text("Auto-dispatch at the same time every day", fontSize = 10.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                    }
+                    Switch(
+                        checked = repeatDaily,
+                        onCheckedChange = { repeatDaily = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = BrandEmerald, checkedTrackColor = BrandEmerald.copy(alpha = 0.5f))
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = AccentAmber.copy(alpha = 0.1f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "ℹ️ Android alarm will wake up AutoRelay and dispatch the broadcast even if your phone screen is off.",
+                        fontSize = 10.sp,
+                        color = AccentAmber,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val now = System.currentTimeMillis()
+                    val targetMillis = if (selectedMinutesFromNow == -1) {
+                        val cal = Calendar.getInstance().apply {
+                            add(Calendar.DAY_OF_YEAR, 1)
+                            set(Calendar.HOUR_OF_DAY, 9)
+                            set(Calendar.MINUTE, 0)
+                            set(Calendar.SECOND, 0)
+                        }
+                        cal.timeInMillis
+                    } else {
+                        now + (selectedMinutesFromNow * 60 * 1000L)
+                    }
+                    onSchedule(targetMillis, selectedCategory, repeatDaily)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)
+            ) {
+                Text("Set Schedule", fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun TemplatesDialog(
+    isDark: Boolean,
+    onSelectTemplate: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val templates = AutomationManager.defaultTemplates
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Description, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Message Templates", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(templates) { t ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = if (isDark) DarkInputBg else LightInputBg),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onSelectTemplate(t.text)
+                                onDismiss()
+                            }
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(t.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = BrandEmerald.copy(alpha = 0.15f),
+                                    modifier = Modifier.padding(4.dp)
+                                ) {
+                                    Text(t.category, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = BrandEmerald, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(t.text, fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary, maxLines = 3)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("👉 Tap to use", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = BrandEmerald)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+fun SafetySettingsDialog(
+    isDark: Boolean,
+    currentMin: Int,
+    currentMax: Int,
+    onSelectMode: (SafetyMode) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val modes = listOf(
+        SafetyMode.FAST,
+        SafetyMode.BALANCED,
+        SafetyMode.ULTRA_SAFE
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Shield, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Anti-Ban Safety Controls", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Adjust human-like pauses between broadcasts to protect your WhatsApp account from being flagged:",
+                    fontSize = 12.sp,
+                    color = if (isDark) DarkTextSecondary else LightTextSecondary
+                )
+
+                modes.forEach { mode ->
+                    val isCurrent = currentMin == mode.minSec && currentMax == mode.maxSec
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isCurrent) BrandEmerald.copy(alpha = 0.12f) else (if (isDark) DarkInputBg else LightInputBg)
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, if (isCurrent) BrandEmerald else Color.Transparent, RoundedCornerShape(10.dp))
+                            .clickable {
+                                onSelectMode(mode)
+                                onDismiss()
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(mode.label, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = if (isDark) DarkTextPrimary else LightTextPrimary)
+                                val desc = when (mode) {
+                                    SafetyMode.FAST -> "Best for sending to small friend circles & <10 groups"
+                                    SafetyMode.BALANCED -> "Recommended: Perfect mix of speed and anti-ban safety"
+                                    SafetyMode.ULTRA_SAFE -> "Maximum protection for 50+ business chats and unknown contacts"
+                                }
+                                Text(desc, fontSize = 11.sp, color = if (isDark) DarkTextSecondary else LightTextSecondary)
+                            }
+                            if (isCurrent) {
+                                Icon(Icons.Default.Check, contentDescription = "Active", tint = BrandEmerald, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+fun CsvImportDialog(
+    isDark: Boolean,
+    activeCategory: String,
+    onPickFile: () -> Unit,
+    onPasteImport: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var pastedText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.DriveFolderUpload, contentDescription = null, tint = BrandEmerald, modifier = Modifier.size(22.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Bulk Import Contacts", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Import 100+ contacts directly into \"$activeCategory\" from a file or text:",
+                    fontSize = 12.sp,
+                    color = if (isDark) DarkTextSecondary else LightTextSecondary
+                )
+
+                Button(
+                    onClick = {
+                        onDismiss()
+                        onPickFile()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Upload, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Select .CSV / .TXT / .VCF File", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = if (isDark) DarkCardBorder else LightCardBorder)
+                    Text("  OR PASTE LIST  ", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isDark) DarkTextMuted else LightTextMuted)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = if (isDark) DarkCardBorder else LightCardBorder)
+                }
+
+                OutlinedTextField(
+                    value = pastedText,
+                    onValueChange = { pastedText = it },
+                    placeholder = {
+                        Text("Paste contacts or phone numbers:\nHarsh Pandey, Study\n+91 98765 43210\nSneha, Business", fontSize = 11.sp)
+                    },
+                    minLines = 4,
+                    maxLines = 6,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (pastedText.isNotBlank()) {
+                        onPasteImport(pastedText)
+                    }
+                    onDismiss()
+                },
+                enabled = pastedText.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = BrandEmerald)
+            ) {
+                Text("Import Contacts", fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }

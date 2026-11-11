@@ -2,9 +2,12 @@ package com.autoposter.whatsapp.service
 
 import java.util.Locale
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import com.autoposter.whatsapp.data.*
 import kotlinx.coroutines.*
@@ -38,6 +41,41 @@ object AutomationManager {
     // Anti-ban timing
     val minDelaySeconds = MutableStateFlow(6)
     val maxDelaySeconds = MutableStateFlow(12)
+
+    // Scheduled Broadcast & Timer State
+    val scheduledTimestamp = MutableStateFlow<Long?>(null)
+    val isScheduleActive = MutableStateFlow(false)
+    val scheduleRepeatDaily = MutableStateFlow(false)
+    val scheduledTargetCategory = MutableStateFlow("All")
+
+    // Message Templates
+    val defaultTemplates = listOf(
+        MessageTemplate(
+            title = "🎓 Study / Class Notice",
+            category = "Study",
+            text = "{Hi|Hello} {name}! Reminder: Tomorrow's class timing is 10:00 AM. Please make sure to bring your notes."
+        ),
+        MessageTemplate(
+            title = "💼 Business / Product Update",
+            category = "Business",
+            text = "{Dear|Hello} {name}, We have an exclusive new update available today! Feel free to reach out for any questions."
+        ),
+        MessageTemplate(
+            title = "🌸 Daily / Festive Greeting",
+            category = "Friends",
+            text = "{Good morning|Namaste|Ram Ram} {name}! Wishing you a wonderful, happy, and productive day ahead 🌸"
+        ),
+        MessageTemplate(
+            title = "📅 Meeting Alert",
+            category = "Business",
+            text = "{Hi|Hello} {name}, Just confirming our scheduled meeting for today. Looking forward to connecting!"
+        ),
+        MessageTemplate(
+            title = "📢 Group Announcement",
+            category = "General",
+            text = "Notice for all members of {name}: Please check the latest update and acknowledge."
+        )
+    )
 
     // Execution state
     private val _status = MutableStateFlow(AutomationStatus())
@@ -207,6 +245,42 @@ object AutomationManager {
         if (added > 0) {
             targetRecipients.value = current
             if (context != null) savePersistence(context)
+        }
+        return added
+    }
+
+    fun importFromCsvOrText(context: Context, content: String, defaultCategory: String = "All"): Int {
+        val lines = content.split("\n", "\r\n").map { it.trim() }.filter { it.isNotEmpty() }
+        val current = targetRecipients.value.toMutableList()
+        var added = 0
+
+        lines.forEach { line ->
+            val lowerLine = line.lowercase(Locale.getDefault())
+            // Skip common CSV headers
+            if (lowerLine.startsWith("name") || lowerLine.startsWith("phone") || lowerLine.startsWith("contact") || lowerLine.startsWith("#")) {
+                return@forEach
+            }
+
+            val parts = line.split(Regex("[,;\t]")).map { it.trim().trim('"', '\'') }.filter { it.isNotEmpty() }
+            if (parts.isEmpty()) return@forEach
+
+            val rawName = parts[0]
+            val explicitCat = if (parts.size > 1 && parts[1].isNotBlank()) parts[1] else null
+
+            val isPhone = rawName.matches(Regex("^[+]?[0-9 -]{7,16}$"))
+            val recipientType = if (isPhone) RecipientType.INDIVIDUAL else (if (isGroupByName(rawName)) RecipientType.GROUP else RecipientType.INDIVIDUAL)
+
+            val cat = explicitCat ?: if (defaultCategory == "All" || defaultCategory == "General") detectCategory(rawName) else defaultCategory
+
+            if (current.none { it.name.equals(rawName, ignoreCase = true) }) {
+                current.add(TargetRecipient(rawName, cat, recipientType, isSelected = true))
+                added++
+            }
+        }
+
+        if (added > 0) {
+            targetRecipients.value = current
+            savePersistence(context)
         }
         return added
     }
@@ -411,6 +485,87 @@ object AutomationManager {
         )
     }
 
+    fun scheduleBroadcast(
+        context: Context,
+        triggerTimeMillis: Long,
+        targetCategory: String = "All",
+        repeatDaily: Boolean = false
+    ) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+        val intent = Intent(context, ScheduleAlarmReceiver::class.java).apply {
+            action = ScheduleAlarmReceiver.ACTION_TRIGGER_SCHEDULE
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            1002,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        if (alarmManager != null) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (alarmManager.canScheduleExactAlarms()) {
+                        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+                    } else {
+                        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+                } else {
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+                }
+            } catch (_: Exception) {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+            }
+        }
+
+        scheduledTimestamp.value = triggerTimeMillis
+        isScheduleActive.value = true
+        scheduleRepeatDaily.value = repeatDaily
+        scheduledTargetCategory.value = targetCategory
+        savePersistence(context)
+    }
+
+    fun cancelSchedule(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+        val intent = Intent(context, ScheduleAlarmReceiver::class.java).apply {
+            action = ScheduleAlarmReceiver.ACTION_TRIGGER_SCHEDULE
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            1002,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (alarmManager != null) {
+            alarmManager.cancel(pendingIntent)
+        }
+
+        scheduledTimestamp.value = null
+        isScheduleActive.value = false
+        scheduleRepeatDaily.value = false
+        savePersistence(context)
+    }
+
+    fun onScheduleTriggered(context: Context) {
+        if (scheduleRepeatDaily.value && scheduledTimestamp.value != null) {
+            val nextTrigger = scheduledTimestamp.value!! + (24 * 60 * 60 * 1000L)
+            scheduleBroadcast(context, nextTrigger, scheduledTargetCategory.value, repeatDaily = true)
+        } else {
+            scheduledTimestamp.value = null
+            isScheduleActive.value = false
+            scheduleRepeatDaily.value = false
+            savePersistence(context)
+        }
+    }
+
+    fun setSafetyMode(mode: SafetyMode, context: Context? = null) {
+        minDelaySeconds.value = mode.minSec
+        maxDelaySeconds.value = mode.maxSec
+        if (context != null) savePersistence(context)
+    }
+
     fun getCurrentTarget(): String? {
         val index = _status.value.currentIndex
         return if (index in activeQueue.indices) activeQueue[index].name else null
@@ -604,6 +759,32 @@ object AutomationManager {
             val success = prefs.getInt("stats_success", 0)
             val savedMin = prefs.getFloat("stats_saved_min", 0f).toDouble()
             stats.value = BroadcastStats(dispatched, success, savedMin)
+
+            // Scheduled Broadcast persistence
+            val schedTime = prefs.getLong("scheduled_timestamp", 0L)
+            val schedActive = prefs.getBoolean("is_schedule_active", false)
+            val schedRepeat = prefs.getBoolean("schedule_repeat_daily", false)
+            val schedCat = prefs.getString("scheduled_category", "All") ?: "All"
+
+            if (schedActive && schedTime > 0L) {
+                if (schedTime > System.currentTimeMillis() || schedRepeat) {
+                    scheduledTimestamp.value = schedTime
+                    isScheduleActive.value = true
+                    scheduleRepeatDaily.value = schedRepeat
+                    scheduledTargetCategory.value = schedCat
+                } else {
+                    scheduledTimestamp.value = null
+                    isScheduleActive.value = false
+                }
+            }
+
+            val savedCaption = prefs.getString("saved_caption_text", "")
+            if (!savedCaption.isNullOrEmpty() && captionText.value.isEmpty()) {
+                captionText.value = savedCaption
+            }
+
+            minDelaySeconds.value = prefs.getInt("min_delay_sec", 6)
+            maxDelaySeconds.value = prefs.getInt("max_delay_sec", 12)
         } catch (_: Exception) {}
     }
 
@@ -632,6 +813,16 @@ object AutomationManager {
             editor.putInt("stats_dispatched", stats.value.totalDispatched)
             editor.putInt("stats_success", stats.value.totalSuccess)
             editor.putFloat("stats_saved_min", stats.value.minutesSaved.toFloat())
+
+            // Scheduled Broadcast persistence
+            editor.putLong("scheduled_timestamp", scheduledTimestamp.value ?: 0L)
+            editor.putBoolean("is_schedule_active", isScheduleActive.value)
+            editor.putBoolean("schedule_repeat_daily", scheduleRepeatDaily.value)
+            editor.putString("scheduled_category", scheduledTargetCategory.value)
+            editor.putString("saved_caption_text", captionText.value)
+            editor.putInt("min_delay_sec", minDelaySeconds.value)
+            editor.putInt("max_delay_sec", maxDelaySeconds.value)
+
             editor.apply()
         } catch (_: Exception) {}
     }

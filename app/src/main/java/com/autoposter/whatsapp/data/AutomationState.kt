@@ -47,3 +47,15 @@ data class AutomationStatus(
     val delayCountdownSeconds: Int = 0,
     val logMessage: String = "Ready"
 )
+
+data class MessageTemplate(
+    val title: String,
+    val category: String,
+    val text: String
+)
+
+enum class SafetyMode(val minSec: Int, val maxSec: Int, val label: String) {
+    FAST(3, 6, "⚡ Fast (3-6s)"),
+    BALANCED(6, 12, "🛡️ Balanced (6-12s, Recommended)"),
+    ULTRA_SAFE(12, 25, "🔒 Ultra-Safe (12-25s)")
+}
