@@ -311,13 +311,41 @@ object AutomationManager {
         return "Friends"
     }
 
+    fun isGroupByName(name: String): Boolean {
+        val lower = name.lowercase(Locale.getDefault())
+
+        // Check if phone number -> strictly INDIVIDUAL
+        if (name.matches(Regex("^[+]?[0-9 -]{7,16}$"))) return false
+
+        val groupKeywords = listOf(
+            "group", "grp", "team", "batch", "squad", "circle", "committee", "samiti",
+            "mandal", "society", "association", "union", "devotees", "yatra", "club",
+            "class", "gang", "official", "hub", "community", "hostel", "parivar",
+            "pariwar", "trust", "sanstha", "kendra", "foundation", "department", "dept",
+            "boys", "girls", "family", "forum", "cell", "buddies", "sangh", "sabha",
+            "warriors", "riders", "league", "academy", "camp", "crew", "sena", "dal",
+            "dham", "mandir", "church", "masjid", "seva"
+        )
+        if (groupKeywords.any { lower.contains(it) }) return true
+
+        // Group Emojis
+        if (name.contains("👥") || name.contains("👨‍👩‍👧") || name.contains("📢") || name.contains("🏆") || name.contains("🏢") || name.contains("🎓")) return true
+
+        // Separators with group tags
+        if (name.contains(" - ") && (lower.contains("202") || lower.contains("team") || lower.contains("grp") || lower.contains("yatra") || lower.contains("batch"))) return true
+        if (name.contains("@") && !name.contains(".com") && !name.contains(".in")) return true
+
+        return false
+    }
+
     fun autoCategorizeAllRecipients(context: Context? = null): Int {
         var count = 0
         targetRecipients.value = targetRecipients.value.map { recipient ->
-            val detected = detectCategory(recipient.name)
-            if (recipient.category != detected) {
+            val detectedCat = detectCategory(recipient.name)
+            val detectedType = if (isGroupByName(recipient.name)) RecipientType.GROUP else RecipientType.INDIVIDUAL
+            if (recipient.category != detectedCat || recipient.type != detectedType) {
                 count++
-                recipient.copy(category = detected)
+                recipient.copy(category = detectedCat, type = detectedType)
             } else recipient
         }
         if (context != null) savePersistence(context)
@@ -525,11 +553,15 @@ object AutomationManager {
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
                     val typeStr = obj.optString("type", "GROUP")
-                    val type = if (typeStr == "INDIVIDUAL") RecipientType.INDIVIDUAL else RecipientType.GROUP
+                    var type = if (typeStr == "INDIVIDUAL") RecipientType.INDIVIDUAL else RecipientType.GROUP
                     val isSel = obj.optBoolean("selected", true)
                     var cat = obj.optString("category", "Friends")
                     if (cat == "General") {
                         cat = detectCategory(obj.getString("name"))
+                    }
+                    // Fix any individual contact that was wrongly saved as GROUP
+                    if (type == RecipientType.GROUP && !isGroupByName(obj.getString("name"))) {
+                        type = RecipientType.INDIVIDUAL
                     }
                     list.add(TargetRecipient(obj.getString("name"), cat, type, isSel))
                 }

@@ -386,60 +386,75 @@ fun AutoRelayCleanWorkspace() {
 
                 // Header for active folder
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
                                 text = if (activeFilter == "All") "All Target Chats (${recipients.size})" else "$activeFilter List (${recipients.size})",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp,
                                 color = if (isDark) DarkTextPrimary else LightTextPrimary
                             )
+
                             if (recipients.isNotEmpty()) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = if (selectedCount == recipients.size) "Deselect All" else "Select All",
+                                        fontSize = 12.sp,
+                                        color = AccentSky,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.clickable {
+                                            val newSelect = selectedCount != recipients.size
+                                            val namesInView = recipients.map { it.name }.toSet()
+                                            AutomationManager.setSelectionForNames(namesInView, newSelect, context)
+                                        }
+                                    )
+                                    Text("•", color = if (isDark) DarkTextMuted else LightTextMuted)
+                                    Text(
+                                        "Clear",
+                                        fontSize = 12.sp,
+                                        color = AccentRose,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.clickable { AutomationManager.clearActiveCategoryRecipients(context) }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (recipients.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
                                     text = "$selectedCount of ${recipients.size} selected for broadcast",
                                     fontSize = 11.sp,
                                     color = BrandEmerald,
                                     fontWeight = FontWeight.Medium
                                 )
-                            }
-                        }
 
-                        if (recipients.isNotEmpty()) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "⚡ Auto-Sort",
-                                    fontSize = 12.sp,
-                                    color = AccentAmber,
-                                    fontWeight = FontWeight.Bold,
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = AccentAmber.copy(alpha = 0.15f),
                                     modifier = Modifier.clickable {
                                         val count = AutomationManager.autoCategorizeAllRecipients(context)
-                                        Toast.makeText(context, "Sorted $count chats into Study, Business, Family & Friends!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Sorted & corrected $count chats into Study, Business, Family & Friends!", Toast.LENGTH_SHORT).show()
                                     }
-                                )
-                                Text("•", color = if (isDark) DarkTextMuted else LightTextMuted)
-                                Text(
-                                    text = if (selectedCount == recipients.size) "Deselect All" else "Select All",
-                                    fontSize = 12.sp,
-                                    color = AccentSky,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.clickable {
-                                        val newSelect = selectedCount != recipients.size
-                                        val namesInView = recipients.map { it.name }.toSet()
-                                        AutomationManager.setSelectionForNames(namesInView, newSelect, context)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(13.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Auto-Sort & Fix", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AccentAmber)
                                     }
-                                )
-                                Text("•", color = if (isDark) DarkTextMuted else LightTextMuted)
-                                Text(
-                                    "Clear",
-                                    fontSize = 12.sp,
-                                    color = AccentRose,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.clickable { AutomationManager.clearActiveCategoryRecipients(context) }
-                                )
+                                }
                             }
                         }
                     }
